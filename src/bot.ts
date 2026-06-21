@@ -1,0 +1,404 @@
+import { Telegraf } from 'telegraf';
+import type { Context } from 'telegraf';
+
+import { BindingStore } from './db.js';
+import { decodeBindDeepLinkPayload } from './deeplink.js';
+import {
+  formatBinding,
+  formatCreatedKey,
+  formatInfo,
+  formatKeys,
+  formatUpstreamDetail,
+  formatUpstreamList,
+  formatUpstreamSelectionRequired,
+  formatUsageReports,
+  splitMessage,
+} from './format.js';
+import { FlowayClient, FlowayHttpError } from './floway-client.js';
+import { computeWindowsFromQuota, maxWindowRange, summarizeUsageWindow, type UsageWindowReport } from './usage.js';
+import type { AppConfig, Binding, UpstreamRecord } from './types.js';
+
+export const BOT_COMMANDS = [
+  { command: 'start', description: 'Show bot usage help' },
+  { command: 'bind', description: 'Bind Floway account' },
+  { command: 'unbind', description: 'Remove Floway binding' },
+  { command: 'me', description: 'Show bound Floway user' },
+  { command: 'info', description: 'Show API endpoints and key usage info' },
+  { command: 'upstreams', description: 'List Floway upstreams' },
+  { command: 'upstream', description: 'Show upstream detail' },
+  { command: 'keys', description: 'List your Floway API keys' },
+  { command: 'newkey', description: 'Create API key' },
+  { command: 'delkey', description: 'Delete API key' },
+  { command: 'rotatekey', description: 'Rotate API key' },
+  { command: 'usage', description: 'Show upstream usage' },
+] as const;
+
+export const registerBotCommands = async (bot: Telegraf): Promise<void> => {
+  await bot.telegram.setMyCommands([...BOT_COMMANDS]);
+};
+
+export const createBot = (config: AppConfig, store: BindingStore, floway: FlowayClient): Telegraf => {
+  const bot = new Telegraf(config.telegramBotToken);
+
+  bot.start(async ctx => {
+    const payload = commandArgs(ctx);
+    if (payload) {
+      const handled = await handleStartPayload(ctx, store, floway, payload);
+      if (handled) return;
+    }
+    await ctx.reply([
+      'Floway bot is running.',
+      'Bind in a private chat with:',
+      '/bind <username> <password>',
+      '',
+      'Then use /info, /upstreams, /keys, and /usage <upstream_id>.',
+    ].join('\n'));
+  });
+
+  bot.command('bind', async ctx => {
+    if (!(await requirePrivate(ctx))) return;
+    const args = commandArgs(ctx);
+    const firstSpace = args.search(/\s/);
+    if (!args || firstSpace < 0) {
+      await ctx.reply('Usage: /bind <username> <password>');
+      return;
+    }
+    const username = args.slice(0, firstSpace).trim();
+    const password = args.slice(firstSpace).trim();
+    if (!username || !password) {
+      await ctx.reply('Usage: /bind <username> <password>');
+      return;
+    }
+
+    try {
+      const login = await floway.login(username, password);
+      store.upsert({
+        telegramUserId: telegramUserId(ctx),
+        flowayUserId: login.user.id,
+        username: login.user.username,
+        flowaySession: login.token,
+      });
+      await bestEffortDeleteMessage(ctx);
+      await ctx.reply(`Bound Floway user ${login.user.username}.`);
+    } catch (error) {
+      await replyError(ctx, 'Bind failed', error);
+    }
+  });
+
+  bot.command('unbind', async ctx => {
+    if (!(await requirePrivate(ctx))) return;
+    const existing = store.get(telegramUserId(ctx));
+    if (existing) {
+      await floway.logout(existing.flowaySession).catch(() => undefined);
+    }
+    const deleted = store.delete(telegramUserId(ctx));
+    await ctx.reply(deleted ? 'Binding removed.' : 'No binding found.');
+  });
+
+  bot.command('me', async ctx => {
+    if (!(await requirePrivate(ctx))) return;
+    const binding = await requireBinding(ctx, store, floway);
+    if (!binding) return;
+    await replyLong(ctx, formatBinding(binding));
+  });
+
+  bot.command('info', async ctx => {
+    await replyLong(ctx, formatInfo(config.flowayBaseUrl));
+  });
+
+  bot.command('upstreams', async ctx => {
+    try {
+      const upstreams = await floway.listUpstreams();
+      await replyLong(ctx, formatUpstreamList(upstreams));
+    } catch (error) {
+      await replyError(ctx, 'Failed to load upstreams', error);
+    }
+  });
+
+  bot.command('upstream', async ctx => {
+    const id = commandArgs(ctx).trim();
+    try {
+      const upstreams = await floway.listUpstreams();
+      const selection = selectUpstream(id, upstreams, 'upstream');
+      if ('message' in selection) {
+        await replyLong(ctx, selection.message);
+        return;
+      }
+      const upstream = selection.upstream;
+      const [models, copilotQuota] = await Promise.all([
+        floway.getUpstreamModels(upstream.id),
+        upstream.provider === 'copilot'
+          ? floway.getCopilotQuota(upstream.id).catch(error => ({ error: error instanceof Error ? error.message : String(error) }))
+          : Promise.resolve(null),
+      ]);
+      await replyLong(ctx, formatUpstreamDetail(upstream, models.data, copilotQuota));
+    } catch (error) {
+      await replyError(ctx, 'Failed to load upstream detail', error);
+    }
+  });
+
+  bot.command('keys', async ctx => {
+    if (!(await requirePrivate(ctx))) return;
+    const binding = await requireBinding(ctx, store, floway);
+    if (!binding) return;
+    try {
+      const keys = await floway.listKeys(binding.flowaySession);
+      await replyLong(ctx, formatKeys(keys));
+    } catch (error) {
+      await replyError(ctx, 'Failed to load keys', error);
+    }
+  });
+
+  bot.command('newkey', async ctx => {
+    if (!(await requirePrivate(ctx))) return;
+    const binding = await requireBinding(ctx, store, floway);
+    if (!binding) return;
+    const args = commandArgs(ctx).trim();
+    if (!args) {
+      await ctx.reply('Usage: /newkey <name> [all|upstream_id[,upstream_id...]]');
+      return;
+    }
+
+    try {
+      const upstreams = await floway.listUpstreams();
+      const parsed = parseNewKeyArgs(args, upstreams);
+      if ('error' in parsed) {
+        await ctx.reply(parsed.error);
+        return;
+      }
+      const key = await floway.createKey(binding.flowaySession, parsed.name, parsed.upstreamIds);
+      await replyLong(ctx, formatCreatedKey(key, 'created'));
+    } catch (error) {
+      await replyError(ctx, 'Failed to create key', error);
+    }
+  });
+
+  bot.command('delkey', async ctx => {
+    if (!(await requirePrivate(ctx))) return;
+    const binding = await requireBinding(ctx, store, floway);
+    if (!binding) return;
+    const id = commandArgs(ctx).trim();
+    if (!id) {
+      await ctx.reply('Usage: /delkey <key_id>');
+      return;
+    }
+    try {
+      await floway.deleteKey(binding.flowaySession, id);
+      await ctx.reply(`Deleted key ${id}.`);
+    } catch (error) {
+      await replyError(ctx, 'Failed to delete key', error);
+    }
+  });
+
+  bot.command('rotatekey', async ctx => {
+    if (!(await requirePrivate(ctx))) return;
+    const binding = await requireBinding(ctx, store, floway);
+    if (!binding) return;
+    const id = commandArgs(ctx).trim();
+    if (!id) {
+      await ctx.reply('Usage: /rotatekey <key_id>');
+      return;
+    }
+    try {
+      const key = await floway.rotateKey(binding.flowaySession, id);
+      await replyLong(ctx, formatCreatedKey(key, 'rotated'));
+    } catch (error) {
+      await replyError(ctx, 'Failed to rotate key', error);
+    }
+  });
+
+  bot.command('usage', async ctx => {
+    if (!(await requirePrivate(ctx))) return;
+    const binding = await requireBinding(ctx, store, floway);
+    if (!binding) return;
+    const upstreamId = commandArgs(ctx).trim();
+
+    try {
+      const upstreams = await floway.listUpstreams();
+      const selection = selectUpstream(upstreamId, upstreams, 'usage');
+      if ('message' in selection) {
+        await replyLong(ctx, selection.message);
+        return;
+      }
+      const upstream = selection.upstream;
+
+      const windows = computeWindowsFromQuota(upstream.codex_quota);
+      const range = maxWindowRange(windows);
+      if (!range) {
+        await replyLong(ctx, formatUsageReports(upstream, []));
+        return;
+      }
+
+      const [tokenUsage, exportSnapshot] = await Promise.all([
+        floway.getTokenUsage(binding.flowaySession, range.start, range.end),
+        floway.exportUsageSnapshot(),
+      ]);
+      const reports: UsageWindowReport[] = windows.map(window =>
+        summarizeUsageWindow(binding.flowayUserId, upstream.id, window, tokenUsage, exportSnapshot));
+      await replyLong(ctx, formatUsageReports(upstream, reports));
+    } catch (error) {
+      await replyError(ctx, 'Failed to load usage', error);
+    }
+  });
+
+  bot.catch((error, ctx) => {
+    console.error('Unhandled Telegram update error:', error);
+    void ctx.reply('Internal bot error. Check bot logs.').catch(() => undefined);
+  });
+
+  return bot;
+};
+
+const handleStartPayload = async (
+  ctx: Context,
+  store: BindingStore,
+  floway: FlowayClient,
+  payload: string,
+): Promise<boolean> => {
+  let credentials;
+  try {
+    credentials = decodeBindDeepLinkPayload(payload);
+  } catch (error) {
+    await bestEffortDeleteMessage(ctx);
+    await replyError(ctx, 'Invalid bind link', error);
+    return true;
+  }
+  if (!credentials) return false;
+  if (!(await requirePrivate(ctx))) return true;
+
+  try {
+    const username = await resolveLoginUsername(floway, credentials.account);
+    const login = await floway.login(username, credentials.password);
+    store.upsert({
+      telegramUserId: telegramUserId(ctx),
+      flowayUserId: login.user.id,
+      username: login.user.username,
+      flowaySession: login.token,
+    });
+    await bestEffortDeleteMessage(ctx);
+    await ctx.reply(`Bound Floway user ${login.user.username}.`);
+  } catch (error) {
+    await bestEffortDeleteMessage(ctx);
+    await replyError(ctx, 'Bind link failed', error);
+  }
+  return true;
+};
+
+const resolveLoginUsername = async (floway: FlowayClient, account: string): Promise<string> => {
+  if (!/^\d+$/.test(account)) return account;
+  const users = await floway.listUsers();
+  return users.find(user => user.id === Number(account))?.username ?? account;
+};
+
+const requirePrivate = async (ctx: Context): Promise<boolean> => {
+  if (ctx.chat?.type === 'private') return true;
+  await ctx.reply('Please DM this bot for binding, key management, and usage commands.');
+  return false;
+};
+
+const telegramUserId = (ctx: Context): string => {
+  if (!ctx.from) throw new Error('Telegram update has no sender');
+  return String(ctx.from.id);
+};
+
+const commandArgs = (ctx: Context): string => {
+  const message = ctx.message;
+  const text = message && 'text' in message && typeof message.text === 'string' ? message.text : '';
+  return text.replace(/^\/[^\s]+(?:\s+)?/, '').trim();
+};
+
+const requireBinding = async (ctx: Context, store: BindingStore, floway: FlowayClient): Promise<Binding | null> => {
+  const binding = store.get(telegramUserId(ctx));
+  if (!binding) {
+    await ctx.reply('Not bound. Use /bind <username> <password> in this private chat.');
+    return null;
+  }
+  try {
+    const me = await floway.getMe(binding.flowaySession);
+    if (me.user.id !== binding.flowayUserId || me.user.username !== binding.username) {
+      return store.upsert({
+        telegramUserId: binding.telegramUserId,
+        flowayUserId: me.user.id,
+        username: me.user.username,
+        flowaySession: binding.flowaySession,
+      });
+    }
+    return binding;
+  } catch (error) {
+    if (error instanceof FlowayHttpError && error.status === 401) {
+      store.delete(telegramUserId(ctx));
+      await ctx.reply('Floway session expired. Bind again with /bind <username> <password>.');
+      return null;
+    }
+    throw error;
+  }
+};
+
+const replyLong = async (ctx: Context, text: string): Promise<void> => {
+  for (const chunk of splitMessage(text)) await ctx.reply(chunk, { parse_mode: 'HTML' });
+};
+
+const replyError = async (ctx: Context, prefix: string, error: unknown): Promise<void> => {
+  const suffix = error instanceof Error ? error.message : String(error);
+  await ctx.reply(`${prefix}: ${suffix}`);
+};
+
+const bestEffortDeleteMessage = async (ctx: Context): Promise<void> => {
+  await ctx.deleteMessage().catch(() => undefined);
+};
+
+export const parseNewKeyArgs = (
+  args: string,
+  upstreams: readonly UpstreamRecord[],
+): { name: string; upstreamIds: string[] | null } | { error: string } => {
+  const tokens = args.split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return { error: 'Usage: /newkey <name> [all|upstream_id[,upstream_id...]]' };
+
+  const known = new Set(upstreams.map(upstream => upstream.id));
+  const last = tokens[tokens.length - 1]!;
+  let name = args;
+  let upstreamIds: string[] | null = null;
+  let scoped = false;
+
+  if (last === 'all') {
+    scoped = true;
+    upstreamIds = null;
+  } else if (last.includes(',') || known.has(last) || (tokens.length > 1 && last.startsWith('up_'))) {
+    scoped = true;
+    upstreamIds = last.split(',').map(item => item.trim()).filter(Boolean);
+  }
+
+  if (scoped) {
+    name = tokens.slice(0, -1).join(' ');
+    if (!name) return { error: 'Key name is required before the upstream scope.' };
+  }
+
+  if (upstreamIds !== null) {
+    const seen = new Set<string>();
+    for (const id of upstreamIds) {
+      if (!known.has(id)) return { error: `Unknown upstream: ${id}` };
+      if (seen.has(id)) return { error: `Duplicate upstream: ${id}` };
+      seen.add(id);
+    }
+    if (upstreamIds.length === 0) return { error: 'Select at least one upstream or use all.' };
+  }
+
+  return { name, upstreamIds };
+};
+
+export const selectUpstream = (
+  requestedId: string,
+  upstreams: readonly UpstreamRecord[],
+  command: 'upstream' | 'usage',
+): { upstream: UpstreamRecord } | { message: string } => {
+  if (requestedId) {
+    const upstream = upstreams.find(item => item.id === requestedId);
+    return upstream
+      ? { upstream }
+      : { message: `Upstream not found: ${htmlSafeText(requestedId)}` };
+  }
+  if (upstreams.length === 1) return { upstream: upstreams[0]! };
+  return { message: formatUpstreamSelectionRequired(command, upstreams) };
+};
+
+const htmlSafeText = (value: string): string => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

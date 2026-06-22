@@ -6,7 +6,14 @@ import type {
   UpstreamModelRecord,
   UpstreamRecord,
 } from './types.js';
-import { BILLING_DIMENSIONS, tokenTotal, type UsageWindowReport } from './usage.js';
+import {
+  BILLING_DIMENSIONS,
+  tokenTotal,
+  type UsageLeaderboardEntry,
+  type UsageLeaderboardReport,
+  type UsageQuotaEstimate,
+  type UsageWindowReport,
+} from './usage.js';
 
 const MAX_TELEGRAM_MESSAGE = 3900;
 
@@ -46,6 +53,13 @@ export const formatNumber = (value: number): string => new Intl.NumberFormat('en
 export const formatPercent = (value: number | null | undefined): string =>
   value === null || value === undefined || !Number.isFinite(value) ? 'n/a' : `${value.toFixed(value >= 10 ? 1 : 2)}%`;
 
+export const formatProgressPercent = (value: number | null | undefined): string => {
+  const width = 15;
+  if (value === null || value === undefined || !Number.isFinite(value)) return `[${' '.repeat(width)}] ${bold('n/a')}`;
+  const filled = value <= 0 ? 0 : Math.max(1, Math.min(width, Math.ceil((value / 100) * width)));
+  return `[${'|'.repeat(filled)}${' '.repeat(width - filled)}] ${bold(formatPercent(value))}`;
+};
+
 export const formatTimestamp = (value: string | number | null | undefined): string => {
   if (value === null || value === undefined) return 'n/a';
   const date = typeof value === 'number' ? new Date(value) : new Date(value);
@@ -67,6 +81,40 @@ export const formatBinding = (binding: Binding): string =>
     label('ID', code(binding.flowayUserId)),
     label('Updated', code(binding.updatedAt)),
   ].join('\n');
+
+export const formatBindDeepLinkSuccess = (username: string, password: string): string =>
+  [
+    blockTitle('Floway account bound'),
+    label('Username', html(username)),
+    label('Password', `<tg-spoiler>${html(password)}</tg-spoiler>`),
+  ].join('\n');
+
+export const formatStartHelp = (binding: Binding | null): string => {
+  if (!binding) {
+    return [
+      blockTitle('Floway bot'),
+      'Bind your Floway account in this private chat:',
+      code('/bind <username> <password>'),
+      '',
+      'After binding, use this bot to manage API keys, inspect upstreams, and view usage.',
+    ].join('\n');
+  }
+
+  return [
+    blockTitle('Floway bot'),
+    label('Signed in', html(binding.username)),
+    '',
+    blockTitle('Commands'),
+    `${code('/info')} - API endpoints and client setup`,
+    `${code('/keys')} - list your API keys`,
+    `${code('/newkey <name> all')} - create an API key`,
+    `${code('/upstreams')} - list upstreams`,
+    `${code('/usage <upstream_id>')} - upstream usage`,
+    `${code('/quota <upstream_id>')} - estimated secondary quota`,
+    `${code('/leaderboard [1d|7d|30d]')} - top users by tokens, cost, and cache`,
+    `${code('/me')} - binding info`,
+  ].join('\n');
+};
 
 export const formatInfo = (baseUrl: string): string => {
   const normalized = baseUrl.replace(/\/+$/, '');
@@ -108,7 +156,7 @@ export const formatUpstreamList = (upstreams: readonly UpstreamRecord[]): string
   return [blockTitle(`Floway upstreams (${upstreams.length})`), ...rows].join('\n\n');
 };
 
-export const formatUpstreamSelectionRequired = (command: 'upstream' | 'usage', upstreams: readonly UpstreamRecord[]): string => {
+export const formatUpstreamSelectionRequired = (command: 'upstream' | 'usage' | 'quota' | 'quota verbose', upstreams: readonly UpstreamRecord[]): string => {
   if (upstreams.length === 0) return blockTitle('No upstreams found.');
   return [
     blockTitle('Choose an upstream'),
@@ -222,6 +270,134 @@ export const formatUsageReports = (upstream: UpstreamRecord, reports: readonly U
     );
   }
   return lines.join('\n');
+};
+
+export const formatQuotaEstimate = (upstream: UpstreamRecord, report: UsageQuotaEstimate | null): string => {
+  if (!report) {
+    return [
+      blockTitle('Quota estimate unavailable'),
+      `Secondary quota window is not available for ${bold(upstream.name)} ${code(upstream.id)}.`,
+    ].join('\n');
+  }
+
+  return [
+    blockTitle('Quota estimate'),
+    '',
+    bold(upstream.name),
+    `Reset in ${formatDurationUntil(report.window.endAt)}`,
+    `${bold('Upstream secondary used')}:`,
+    formatProgressPercent(report.upstreamUsedPercent),
+    `${bold('Estimated your used')}:`,
+    `${formatProgressPercent(report.estimatedUserUsedPercent)} of your equal share (${html(`Assumed ${formatNumber(report.nonAdminUserCount)} users`)})`,
+    '',
+    `${blockTitle('Estimate only')}: This uses current upstream-level usage and raw token totals. Actual per-user quota pressure depends on every upstream user's model mix and cache rate.`,
+  ].join('\n');
+};
+
+export const formatQuotaEstimateVerbose = (upstream: UpstreamRecord, report: UsageQuotaEstimate | null): string => {
+  if (!report) {
+    return [
+      blockTitle('Quota estimate unavailable'),
+      `Secondary quota window is not available for ${bold(upstream.name)} ${code(upstream.id)}.`,
+    ].join('\n');
+  }
+
+  return [
+    `${blockTitle('Quota estimate')} ${bold(upstream.name)} ${code(upstream.id)}`,
+    label('Window', `${code(report.window.startAt)} -> ${code(report.window.endAt)}`),
+    label('Upstream secondary used', formatProgressPercent(report.upstreamUsedPercent)),
+    label('Assumed users', `${formatNumber(report.nonAdminUserCount)} non-admin Floway users`),
+    label('Equal upstream share', formatProgressPercent(report.equalSharePercent)),
+    '',
+    label('Your upstream tokens', bold(formatNumber(tokenTotal(report.user.tokens)))),
+    label('All upstream tokens', bold(formatNumber(tokenTotal(report.upstream.tokens)))),
+    label('Your token share', formatProgressPercent(report.userTokenSharePercent)),
+    label('Your estimated upstream quota share', formatProgressPercent(report.userUpstreamQuotaSharePercent)),
+    label('Estimated your used', `${formatProgressPercent(report.estimatedUserUsedPercent)} of your equal share`),
+    '',
+    `${blockTitle('Estimate only')}: This uses current upstream-level usage and raw token totals. Actual per-user quota pressure depends on every upstream user's model mix and cache rate.`,
+  ].join('\n');
+};
+
+export const formatQuotaEstimateInsufficient = (upstream: UpstreamRecord, windowStartAt: string, windowEndAt: string, upstreamUsedPercent: number): string =>
+  [
+    blockTitle('Quota estimate'),
+    '',
+    bold(upstream.name),
+    `Reset in ${formatDurationUntil(windowEndAt)}`,
+    `${bold('Upstream secondary used')}:`,
+    formatProgressPercent(upstreamUsedPercent),
+    '',
+    'Not enough usage data yet. The limit probably just reset, so go make some requests.',
+  ].join('\n');
+
+export const formatUsageLeaderboard = (report: UsageLeaderboardReport): string => [
+  `${blockTitle('Leaderboard')} ${bold(`${report.days}d`)}`,
+  label('Window', `${code(report.startAt)} -> ${code(report.endAt)}`),
+  label('Exported', code(formatTimestamp(report.exportedAt))),
+  '',
+  blockTitle('By token usage'),
+  ...formatLeaderboardRows(report.byTokens, 'tokens', report),
+  '',
+  blockTitle('By cost'),
+  ...formatLeaderboardRows(report.byCost, 'cost', report),
+  '',
+  blockTitle('By cache %'),
+  ...formatLeaderboardRows(report.byCachePercent, 'cachePercent', report),
+].join('\n');
+
+const formatLeaderboardRows = (
+  entries: readonly UsageLeaderboardEntry[],
+  metric: 'tokens' | 'cost' | 'cachePercent',
+  report: UsageLeaderboardReport,
+): string[] => {
+  if (entries.length === 0) return ['No usage in this window.'];
+  return entries.map((entry, index) =>
+    `${index + 1}. ${bold(entry.username)} - ${formatLeaderboardMetric(entry, metric)} | ${formatLeaderboardShare(entry, metric, report)}`);
+};
+
+const formatLeaderboardMetric = (
+  entry: UsageLeaderboardEntry,
+  metric: 'tokens' | 'cost' | 'cachePercent',
+): string => {
+  switch (metric) {
+  case 'tokens':
+    return `${bold(formatNumber(tokenTotal(entry.totals.tokens)))} tokens`;
+  case 'cost':
+    return bold(formatMoney(entry.totals.cost));
+  case 'cachePercent':
+    return `${bold(formatPercent(entry.cachePercent))} cache`;
+  }
+};
+
+const formatLeaderboardShare = (
+  entry: UsageLeaderboardEntry,
+  metric: 'tokens' | 'cost' | 'cachePercent',
+  report: UsageLeaderboardReport,
+): string => {
+  switch (metric) {
+  case 'tokens':
+    return bold(formatPercent(sharePercent(tokenTotal(entry.totals.tokens), report.totals.tokens)));
+  case 'cost':
+    return bold(formatPercent(sharePercent(entry.totals.cost, report.totals.cost)));
+  case 'cachePercent':
+    return `${bold(formatPercent(sharePercent(entry.totals.tokens.input_cache_read ?? 0, report.totals.cacheReadTokens)))} cached share`;
+  }
+};
+
+const sharePercent = (value: number, total: number): number | null =>
+  total > 0 ? (value / total) * 100 : null;
+
+const formatDurationUntil = (value: string, now = new Date()): string => {
+  const end = new Date(value);
+  if (!Number.isFinite(end.getTime())) return 'n/a';
+  const totalMinutes = Math.max(0, Math.ceil((end.getTime() - now.getTime()) / 60_000));
+  if (totalMinutes === 0) return 'now';
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  const hourUnit = hours === 1 ? 'hour' : 'hours';
+  if (hours === 0) return `${minutes} min`;
+  return `${formatNumber(hours)} ${hourUnit} ${minutes} min`;
 };
 
 const formatModelsCache = (upstream: UpstreamRecord): string => {

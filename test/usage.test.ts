@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   computeWindowsFromQuota,
   recordCostUsd,
+  summarizeUsageLeaderboard,
+  summarizeUsageQuotaEstimate,
   summarizeUsageWindow,
   unitPriceForDimension,
 } from '../src/usage.js';
@@ -111,5 +113,152 @@ describe('usage summary', () => {
     }, { records: [], keys: [] }, { exportedAt: 'x', users: [], apiKeys: [], usage: [] });
     expect(report.userTokenSharePercent).toBeNull();
     expect(report.userRequestSharePercent).toBeNull();
+  });
+});
+
+describe('usage leaderboard', () => {
+  it('builds top-four rankings by tokens, cost, and cache percent', () => {
+    const snapshot: SanitizedExportSnapshot = {
+      exportedAt: '2026-06-22T12:34:00.000Z',
+      users: [
+        { id: 1, username: 'alice', deletedAt: null },
+        { id: 2, username: 'bob', deletedAt: null },
+        { id: 3, username: 'carol', deletedAt: null },
+        { id: 4, username: 'dave', deletedAt: null },
+        { id: 5, username: 'erin', deletedAt: null },
+      ],
+      apiKeys: [
+        { id: 'k1', userId: 1, name: 'A', createdAt: '2026-06-01T00:00:00.000Z', upstreamIds: null, deletedAt: null },
+        { id: 'k2', userId: 2, name: 'B', createdAt: '2026-06-01T00:00:00.000Z', upstreamIds: null, deletedAt: null },
+        { id: 'k3', userId: 3, name: 'C', createdAt: '2026-06-01T00:00:00.000Z', upstreamIds: null, deletedAt: null },
+        { id: 'k4', userId: 4, name: 'D', createdAt: '2026-06-01T00:00:00.000Z', upstreamIds: null, deletedAt: null },
+        { id: 'k5', userId: 5, name: 'E', createdAt: '2026-06-01T00:00:00.000Z', upstreamIds: null, deletedAt: null },
+      ],
+      usage: [
+        {
+          keyId: 'k1',
+          model: 'm',
+          upstream: 'up',
+          modelKey: 'm',
+          hour: '2026-06-22T12',
+          requests: 1,
+          tokens: { input: 100, input_cache_read: 100, output: 100 },
+          cost: { input: 10, input_cache_read: 1, output: 50 },
+        },
+        {
+          keyId: 'k2',
+          model: 'm',
+          upstream: 'up',
+          modelKey: 'm',
+          hour: '2026-06-21T01',
+          requests: 1,
+          tokens: { input: 600, output: 600 },
+          cost: { input: 1, output: 1 },
+        },
+        {
+          keyId: 'k3',
+          model: 'm',
+          upstream: 'up',
+          modelKey: 'm',
+          hour: '2026-06-22T10',
+          requests: 1,
+          tokens: { input: 10, input_cache_read: 90 },
+          cost: { input: 1, input_cache_read: 1 },
+        },
+        {
+          keyId: 'k4',
+          model: 'm',
+          upstream: 'up',
+          modelKey: 'm',
+          hour: '2026-06-20T10',
+          requests: 1,
+          tokens: { input: 250, output: 100 },
+          cost: { input: 1, output: 1 },
+        },
+        {
+          keyId: 'k5',
+          model: 'm',
+          upstream: 'up',
+          modelKey: 'm',
+          hour: '2026-06-19T10',
+          requests: 1,
+          tokens: { input: 20, output: 10 },
+          cost: { input: 1000, output: 1000 },
+        },
+        {
+          keyId: 'k4',
+          model: 'm',
+          upstream: 'up',
+          modelKey: 'm',
+          hour: '2026-06-01T10',
+          requests: 1,
+          tokens: { input: 99_999_999 },
+          cost: { input: 1000 },
+        },
+        {
+          keyId: 'missing',
+          model: 'm',
+          upstream: 'up',
+          modelKey: 'm',
+          hour: '2026-06-22T12',
+          requests: 1,
+          tokens: { input: 99_999_999 },
+          cost: { input: 1000 },
+        },
+      ],
+    };
+
+    const report = summarizeUsageLeaderboard(snapshot);
+
+    expect(report.startAt).toBe('2026-06-15T12:34:00.000Z');
+    expect(report.endAt).toBe('2026-06-22T12:34:00.000Z');
+    expect(report.byTokens.map(entry => entry.username)).toEqual(['bob', 'dave', 'alice', 'carol']);
+    expect(report.byCost.map(entry => entry.username)).toEqual(['erin', 'alice', 'bob', 'dave']);
+    expect(report.byCachePercent.map(entry => entry.username)).toEqual(['carol', 'alice', 'bob', 'dave']);
+    expect(report.byCachePercent[0]?.cachePercent).toBe(90);
+    expect(report.totals.tokens).toBe(1980);
+    expect(report.totals.cost).toBeCloseTo(0.03775);
+    expect(report.totals.cacheReadTokens).toBe(190);
+
+    const oneDayReport = summarizeUsageLeaderboard(snapshot, 1);
+    expect(oneDayReport.startAt).toBe('2026-06-21T12:34:00.000Z');
+    expect(oneDayReport.byTokens.map(entry => entry.username)).toEqual(['alice', 'carol']);
+    expect(oneDayReport.totals.tokens).toBe(400);
+    expect(oneDayReport.totals.cost).toBeCloseTo(0.0062);
+    expect(oneDayReport.totals.cacheReadTokens).toBe(190);
+  });
+});
+
+describe('usage quota estimate', () => {
+  it('infers user used percent from token share and upstream secondary used percent', () => {
+    const snapshot: SanitizedExportSnapshot = {
+      exportedAt: '2026-06-22T00:00:00.000Z',
+      users: [
+        { id: 7, username: 'alice', deletedAt: null },
+        { id: 8, username: 'bob', deletedAt: null },
+      ],
+      apiKeys: [
+        { id: 'k1', userId: 7, name: 'A', createdAt: '2026-06-20T00:00:00.000Z', upstreamIds: null, deletedAt: null },
+        { id: 'k2', userId: 8, name: 'B', createdAt: '2026-06-20T00:00:00.000Z', upstreamIds: null, deletedAt: null },
+      ],
+      usage: [
+        { keyId: 'k1', model: 'm', upstream: 'up1', modelKey: 'm', hour: '2026-06-21T01', requests: 1, tokens: { input: 100 }, cost: { input: 1 } },
+        { keyId: 'k2', model: 'm', upstream: 'up1', modelKey: 'm', hour: '2026-06-21T01', requests: 3, tokens: { input: 300 }, cost: { input: 1 } },
+        { keyId: 'k1', model: 'm', upstream: 'up2', modelKey: 'm', hour: '2026-06-21T01', requests: 1, tokens: { input: 999 }, cost: { input: 1 } },
+      ],
+    };
+
+    const report = summarizeUsageQuotaEstimate(7, 'up1', {
+      label: 'Secondary window',
+      startAt: '2026-06-21T00:00:00.000Z',
+      endAt: '2026-06-22T00:00:00.000Z',
+      startHour: '2026-06-21T00',
+      endHour: '2026-06-22T00',
+    }, 80, snapshot, 4);
+
+    expect(report.userTokenSharePercent).toBe(25);
+    expect(report.userUpstreamQuotaSharePercent).toBe(20);
+    expect(report.equalSharePercent).toBe(25);
+    expect(report.estimatedUserUsedPercent).toBe(80);
   });
 });

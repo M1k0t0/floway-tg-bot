@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseNewKeyArgs, selectUpstream } from '../src/bot.js';
+import {
+  canShareUpstreamQuota,
+  canViewLeaderboard,
+  parseLeaderboardArgs,
+  parseNewKeyArgs,
+  parseQuotaArgs,
+  selectUpstream,
+} from '../src/bot.js';
 import type { UpstreamRecord } from '../src/types.js';
 
 const upstream = (id: string): UpstreamRecord => ({
@@ -46,6 +53,51 @@ describe('parseNewKeyArgs', () => {
     expect(parseNewKeyArgs('key up_missing', upstreams)).toEqual({
       error: 'Unknown upstream: up_missing',
     });
+  });
+});
+
+describe('parseLeaderboardArgs', () => {
+  it('defaults to 7d and accepts the supported windows', () => {
+    expect(parseLeaderboardArgs('')).toEqual({ days: 7 });
+    expect(parseLeaderboardArgs('1')).toEqual({ days: 1 });
+    expect(parseLeaderboardArgs('1d')).toEqual({ days: 1 });
+    expect(parseLeaderboardArgs('7d')).toEqual({ days: 7 });
+    expect(parseLeaderboardArgs('30')).toEqual({ days: 30 });
+    expect(parseLeaderboardArgs('30D')).toEqual({ days: 30 });
+  });
+
+  it('rejects unsupported windows', () => {
+    expect(parseLeaderboardArgs('14d')).toEqual({ error: 'Usage: /leaderboard [1d|7d|30d]' });
+  });
+});
+
+describe('parseQuotaArgs', () => {
+  it('defaults to compact output and parses verbose as a subcommand', () => {
+    expect(parseQuotaArgs('')).toEqual({ upstreamId: '', verbose: false });
+    expect(parseQuotaArgs('up_a')).toEqual({ upstreamId: 'up_a', verbose: false });
+    expect(parseQuotaArgs('verbose')).toEqual({ upstreamId: '', verbose: true });
+    expect(parseQuotaArgs('verbose up_a')).toEqual({ upstreamId: 'up_a', verbose: true });
+  });
+
+  it('rejects extra quota arguments', () => {
+    expect(parseQuotaArgs('up_a verbose')).toEqual({ error: 'Usage: /quota [verbose] <upstream_id>' });
+    expect(parseQuotaArgs('verbose up_a extra')).toEqual({ error: 'Usage: /quota [verbose] <upstream_id>' });
+  });
+});
+
+describe('leaderboard permission', () => {
+  it('requires global telemetry permission', () => {
+    expect(canViewLeaderboard({ canViewGlobalTelemetry: true })).toBe(true);
+    expect(canViewLeaderboard({ canViewGlobalTelemetry: false })).toBe(false);
+  });
+});
+
+describe('quota sharing users', () => {
+  it('counts only non-admin users who can access the selected upstream', () => {
+    expect(canShareUpstreamQuota({ isAdmin: false, upstreamIds: null }, 'up_a')).toBe(true);
+    expect(canShareUpstreamQuota({ isAdmin: false, upstreamIds: ['up_a'] }, 'up_a')).toBe(true);
+    expect(canShareUpstreamQuota({ isAdmin: false, upstreamIds: ['up_b'] }, 'up_a')).toBe(false);
+    expect(canShareUpstreamQuota({ isAdmin: true, upstreamIds: null }, 'up_a')).toBe(false);
   });
 });
 

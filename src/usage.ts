@@ -43,6 +43,44 @@ export interface UsageTotals {
   cost: number;
 }
 
+export type LeaderboardDays = 1 | 7 | 30;
+
+export interface UsageLeaderboardEntry {
+  userId: number;
+  username: string;
+  totals: UsageTotals;
+  cachePercent: number | null;
+}
+
+export interface UsageLeaderboardTotals {
+  tokens: number;
+  cost: number;
+  cacheReadTokens: number;
+}
+
+export interface UsageLeaderboardReport {
+  days: LeaderboardDays;
+  startAt: string;
+  endAt: string;
+  exportedAt: string;
+  totals: UsageLeaderboardTotals;
+  byTokens: UsageLeaderboardEntry[];
+  byCost: UsageLeaderboardEntry[];
+  byCachePercent: UsageLeaderboardEntry[];
+}
+
+export interface UsageQuotaEstimate {
+  window: UsageWindow;
+  upstreamUsedPercent: number;
+  user: UsageTotals;
+  upstream: UsageTotals;
+  userTokenSharePercent: number | null;
+  userUpstreamQuotaSharePercent: number | null;
+  nonAdminUserCount: number;
+  equalSharePercent: number | null;
+  estimatedUserUsedPercent: number | null;
+}
+
 export const unitPriceForDimension = (pricing: ModelPricing | null, dimension: BillingDimension): number | null => {
   if (!pricing) return null;
   switch (dimension) {
@@ -75,6 +113,15 @@ export const recordCostUsd = (record: UsageRecord): number => {
 
 export const tokenTotal = (tokens: TokenUsage): number =>
   BILLING_DIMENSIONS.reduce((sum, dimension) => sum + (tokens[dimension] ?? 0), 0);
+
+export const cacheReadPercent = (tokens: TokenUsage): number | null => {
+  const cacheRead = tokens.input_cache_read ?? 0;
+  const inputTokens = (tokens.input ?? 0)
+    + cacheRead
+    + (tokens.input_cache_write ?? 0)
+    + (tokens.input_cache_write_1h ?? 0);
+  return inputTokens > 0 ? (cacheRead / inputTokens) * 100 : null;
+};
 
 export const emptyTotals = (): UsageTotals => ({ requests: 0, tokens: {}, cost: 0 });
 
@@ -144,12 +191,129 @@ export const summarizeUsageWindow = (
   };
 };
 
+export const summarizeUsageLeaderboard = (
+  snapshot: SanitizedExportSnapshot,
+  days: LeaderboardDays = 7,
+  limit = 4,
+  now = new Date(),
+): UsageLeaderboardReport => {
+  const exportedAt = validDateOrFallback(snapshot.exportedAt, now);
+  const startAt = new Date(exportedAt.getTime() - days * 24 * 60 * 60 * 1000);
+  const startHour = hourString(startAt);
+  const endHour = hourString(new Date(exportedAt.getTime() + 60 * 60 * 1000));
+  const usersById = new Map(snapshot.users.map(user => [user.id, user]));
+  const userIdByKey = new Map(snapshot.apiKeys.map(key => [key.id, key.userId]));
+  const entries = new Map<number, UsageLeaderboardEntry>();
+
+  for (const record of snapshot.usage) {
+    if (record.hour < startHour || record.hour >= endHour) continue;
+    const userId = userIdByKey.get(record.keyId);
+    if (userId === undefined) continue;
+    const user = usersById.get(userId);
+    let entry = entries.get(userId);
+    if (!entry) {
+      entry = {
+        userId,
+        username: user?.username ?? `user:${userId}`,
+        totals: emptyTotals(),
+        cachePercent: null,
+      };
+      entries.set(userId, entry);
+    }
+    addUsageRecord(entry.totals, record);
+  }
+
+  const all = [...entries.values()].map(entry => ({
+    ...entry,
+    cachePercent: cacheReadPercent(entry.totals.tokens),
+  }));
+  const totals: UsageLeaderboardTotals = {
+    tokens: all.reduce((sum, entry) => sum + tokenTotal(entry.totals.tokens), 0),
+    cost: all.reduce((sum, entry) => sum + entry.totals.cost, 0),
+    cacheReadTokens: all.reduce((sum, entry) => sum + (entry.totals.tokens.input_cache_read ?? 0), 0),
+  };
+
+  return {
+    days,
+    startAt: startAt.toISOString(),
+    endAt: exportedAt.toISOString(),
+    exportedAt: snapshot.exportedAt,
+    totals,
+    byTokens: all.slice().sort(compareByTokens).slice(0, limit),
+    byCost: all.slice().sort(compareByCost).slice(0, limit),
+    byCachePercent: all.slice().sort(compareByCachePercent).slice(0, limit),
+  };
+};
+
+export const summarizeUsageQuotaEstimate = (
+  flowayUserId: number,
+  upstreamId: string,
+  window: UsageWindow,
+  upstreamUsedPercent: number,
+  snapshot: SanitizedExportSnapshot,
+  nonAdminUserCount: number,
+): UsageQuotaEstimate => {
+  const userKeyIds = new Set(snapshot.apiKeys.filter(key => key.userId === flowayUserId).map(key => key.id));
+  const user = emptyTotals();
+  const upstream = emptyTotals();
+
+  for (const record of snapshot.usage) {
+    if (record.upstream !== upstreamId) continue;
+    if (record.hour < window.startHour || record.hour >= window.endHour) continue;
+    addUsageRecord(upstream, record);
+    if (userKeyIds.has(record.keyId)) addUsageRecord(user, record);
+  }
+
+  const upstreamTokens = tokenTotal(upstream.tokens);
+  const userTokens = tokenTotal(user.tokens);
+  const userTokenSharePercent = upstreamTokens > 0 ? (userTokens / upstreamTokens) * 100 : null;
+  const userUpstreamQuotaSharePercent = userTokenSharePercent !== null
+    ? (userTokenSharePercent / 100) * upstreamUsedPercent
+    : null;
+  const equalSharePercent = nonAdminUserCount > 0 ? 100 / nonAdminUserCount : null;
+  const estimatedUserUsedPercent = userUpstreamQuotaSharePercent !== null && equalSharePercent !== null
+    ? (userUpstreamQuotaSharePercent / equalSharePercent) * 100
+    : null;
+
+  return {
+    window,
+    upstreamUsedPercent,
+    user,
+    upstream,
+    userTokenSharePercent,
+    userUpstreamQuotaSharePercent,
+    nonAdminUserCount,
+    equalSharePercent,
+    estimatedUserUsedPercent,
+  };
+};
+
 export const maxWindowRange = (windows: readonly UsageWindow[]): { start: string; end: string } | null => {
   if (windows.length === 0) return null;
   return {
     start: windows.reduce((min, window) => window.startHour < min ? window.startHour : min, windows[0]!.startHour),
     end: windows.reduce((max, window) => window.endHour > max ? window.endHour : max, windows[0]!.endHour),
   };
+};
+
+const compareByTokens = (a: UsageLeaderboardEntry, b: UsageLeaderboardEntry): number =>
+  tokenTotal(b.totals.tokens) - tokenTotal(a.totals.tokens)
+  || b.totals.cost - a.totals.cost
+  || a.username.localeCompare(b.username);
+
+const compareByCost = (a: UsageLeaderboardEntry, b: UsageLeaderboardEntry): number =>
+  b.totals.cost - a.totals.cost
+  || tokenTotal(b.totals.tokens) - tokenTotal(a.totals.tokens)
+  || a.username.localeCompare(b.username);
+
+const compareByCachePercent = (a: UsageLeaderboardEntry, b: UsageLeaderboardEntry): number =>
+  (b.cachePercent ?? -1) - (a.cachePercent ?? -1)
+  || tokenTotal(b.totals.tokens) - tokenTotal(a.totals.tokens)
+  || a.username.localeCompare(b.username);
+
+const validDateOrFallback = (value: string, fallback: Date): Date => {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date : fallback;
 };
 
 const quotaWindow = (

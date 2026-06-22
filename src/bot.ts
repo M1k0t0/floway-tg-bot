@@ -5,18 +5,32 @@ import { BindingStore } from './db.js';
 import { decodeBindDeepLinkPayload } from './deeplink.js';
 import {
   formatBinding,
+  formatBindDeepLinkSuccess,
   formatCreatedKey,
   formatInfo,
   formatKeys,
+  formatQuotaEstimate,
+  formatQuotaEstimateInsufficient,
+  formatQuotaEstimateVerbose,
+  formatStartHelp,
   formatUpstreamDetail,
   formatUpstreamList,
   formatUpstreamSelectionRequired,
+  formatUsageLeaderboard,
   formatUsageReports,
   splitMessage,
 } from './format.js';
 import { FlowayClient, FlowayHttpError } from './floway-client.js';
-import { computeWindowsFromQuota, maxWindowRange, summarizeUsageWindow, type UsageWindowReport } from './usage.js';
-import type { AppConfig, Binding, UpstreamRecord } from './types.js';
+import {
+  computeWindowsFromQuota,
+  maxWindowRange,
+  summarizeUsageLeaderboard,
+  summarizeUsageQuotaEstimate,
+  summarizeUsageWindow,
+  type LeaderboardDays,
+  type UsageWindowReport,
+} from './usage.js';
+import type { AppConfig, Binding, FlowayAdminUser, FlowayUser, UpstreamRecord } from './types.js';
 
 export const BOT_COMMANDS = [
   { command: 'start', description: 'Show bot usage help' },
@@ -31,6 +45,8 @@ export const BOT_COMMANDS = [
   { command: 'delkey', description: 'Delete API key' },
   { command: 'rotatekey', description: 'Rotate API key' },
   { command: 'usage', description: 'Show upstream usage' },
+  { command: 'quota', description: 'Show estimated upstream quota' },
+  { command: 'leaderboard', description: 'Show usage leaderboard' },
 ] as const;
 
 export const registerBotCommands = async (bot: Telegraf): Promise<void> => {
@@ -46,13 +62,8 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
       const handled = await handleStartPayload(ctx, store, floway, payload);
       if (handled) return;
     }
-    await ctx.reply([
-      'Floway bot is running.',
-      'Bind in a private chat with:',
-      '/bind <username> <password>',
-      '',
-      'Then use /info, /upstreams, /keys, and /usage <upstream_id>.',
-    ].join('\n'));
+    if (!(await requirePrivate(ctx))) return;
+    await replyLong(ctx, formatStartHelp(store.get(telegramUserId(ctx))));
   });
 
   bot.command('bind', async ctx => {
@@ -241,6 +252,78 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
     }
   });
 
+  bot.command('quota', async ctx => {
+    if (!(await requirePrivate(ctx))) return;
+    const binding = await requireBinding(ctx, store, floway);
+    if (!binding) return;
+    const parsed = parseQuotaArgs(commandArgs(ctx));
+    if ('error' in parsed) {
+      await ctx.reply(parsed.error);
+      return;
+    }
+
+    try {
+      const [upstreams, users] = await Promise.all([
+        floway.listUpstreams(),
+        floway.listUsers(),
+      ]);
+      const selection = selectUpstream(parsed.upstreamId, upstreams, parsed.verbose ? 'quota verbose' : 'quota');
+      if ('message' in selection) {
+        await replyLong(ctx, selection.message);
+        return;
+      }
+      const upstream = selection.upstream;
+      const secondaryWindow = computeWindowsFromQuota(upstream.codex_quota)
+        .find(window => window.label === 'Secondary window') ?? null;
+      const secondaryUsedPercent = upstream.codex_quota?.secondary_used_percent;
+      if (!secondaryWindow || secondaryUsedPercent === undefined) {
+        await replyLong(ctx, formatQuotaEstimate(upstream, null));
+        return;
+      }
+      if (secondaryUsedPercent < 1) {
+        await replyLong(ctx, formatQuotaEstimateInsufficient(upstream, secondaryWindow.startAt, secondaryWindow.endAt, secondaryUsedPercent));
+        return;
+      }
+
+      const exportSnapshot = await floway.exportUsageSnapshot();
+      const nonAdminUserCount = users.filter(user => canShareUpstreamQuota(user, upstream.id)).length;
+      const report = summarizeUsageQuotaEstimate(
+        binding.flowayUserId,
+        upstream.id,
+        secondaryWindow,
+        secondaryUsedPercent,
+        exportSnapshot,
+        nonAdminUserCount,
+      );
+      await replyLong(ctx, parsed.verbose ? formatQuotaEstimateVerbose(upstream, report) : formatQuotaEstimate(upstream, report));
+    } catch (error) {
+      await replyError(ctx, 'Failed to load quota estimate', error);
+    }
+  });
+
+  bot.command('leaderboard', async ctx => {
+    if (!(await requirePrivate(ctx))) return;
+    const parsed = parseLeaderboardArgs(commandArgs(ctx));
+    if ('error' in parsed) {
+      await ctx.reply(parsed.error);
+      return;
+    }
+    const binding = await requireBinding(ctx, store, floway);
+    if (!binding) return;
+
+    try {
+      const me = await floway.getMe(binding.flowaySession);
+      if (!canViewLeaderboard(me.user)) {
+        await ctx.reply('Global telemetry access is required to view the leaderboard.');
+        return;
+      }
+      const exportSnapshot = await floway.exportUsageSnapshot();
+      await replyLong(ctx, formatUsageLeaderboard(summarizeUsageLeaderboard(exportSnapshot, parsed.days)));
+    } catch (error) {
+      await replyError(ctx, 'Failed to load leaderboard', error);
+    }
+  });
+
   bot.catch((error, ctx) => {
     console.error('Unhandled Telegram update error:', error);
     void ctx.reply('Internal bot error. Check bot logs.').catch(() => undefined);
@@ -276,7 +359,7 @@ const handleStartPayload = async (
       flowaySession: login.token,
     });
     await bestEffortDeleteMessage(ctx);
-    await ctx.reply(`Bound Floway user ${login.user.username}.`);
+    await replyLong(ctx, formatBindDeepLinkSuccess(login.user.username, credentials.password));
   } catch (error) {
     await bestEffortDeleteMessage(ctx);
     await replyError(ctx, 'Bind link failed', error);
@@ -386,10 +469,35 @@ export const parseNewKeyArgs = (
   return { name, upstreamIds };
 };
 
+export const parseLeaderboardArgs = (args: string): { days: LeaderboardDays } | { error: string } => {
+  const normalized = args.trim().toLowerCase();
+  if (normalized === '1' || normalized === '1d') return { days: 1 };
+  if (!normalized || normalized === '7' || normalized === '7d') return { days: 7 };
+  if (normalized === '30' || normalized === '30d') return { days: 30 };
+  return { error: 'Usage: /leaderboard [1d|7d|30d]' };
+};
+
+export const parseQuotaArgs = (args: string): { upstreamId: string; verbose: boolean } | { error: string } => {
+  const tokens = args.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return { upstreamId: '', verbose: false };
+  if (tokens[0] === 'verbose') {
+    if (tokens.length > 2) return { error: 'Usage: /quota [verbose] <upstream_id>' };
+    return { upstreamId: tokens[1] ?? '', verbose: true };
+  }
+  if (tokens.length > 1) return { error: 'Usage: /quota [verbose] <upstream_id>' };
+  return { upstreamId: tokens[0]!, verbose: false };
+};
+
+export const canViewLeaderboard = (user: Pick<FlowayUser, 'canViewGlobalTelemetry'>): boolean =>
+  user.canViewGlobalTelemetry;
+
+export const canShareUpstreamQuota = (user: Pick<FlowayAdminUser, 'isAdmin' | 'upstreamIds'>, upstreamId: string): boolean =>
+  !user.isAdmin && (user.upstreamIds === null || user.upstreamIds.includes(upstreamId));
+
 export const selectUpstream = (
   requestedId: string,
   upstreams: readonly UpstreamRecord[],
-  command: 'upstream' | 'usage',
+  command: 'upstream' | 'usage' | 'quota' | 'quota verbose',
 ): { upstream: UpstreamRecord } | { message: string } => {
   if (requestedId) {
     const upstream = upstreams.find(item => item.id === requestedId);

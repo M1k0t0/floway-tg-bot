@@ -38,10 +38,12 @@ corepack pnpm start
 - `/delkey <key_id>`
 - `/rotatekey <key_id>`
 - `/usage <upstream_id>`
+- `/quota [verbose] <upstream_id>`
+- `/leaderboard [1d|7d|30d]`
 
-Binding and key operations are private-chat only. Passwords are exchanged for a
-Floway session and are never stored. Floway sessions are encrypted locally with
-`BOT_SECRET_KEY`.
+Binding, key, usage, quota, and leaderboard operations are private-chat only.
+Passwords are exchanged for a Floway session and are never stored. Floway
+sessions are encrypted locally with `BOT_SECRET_KEY`.
 
 ## Bind Deep Links
 

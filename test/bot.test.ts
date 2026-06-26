@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  BOT_COMMANDS,
+  TEST_SECONDARY_WINDOW_COMMAND,
   canShareUpstreamQuota,
   canViewLeaderboard,
   filterUpstreamsForUser,
@@ -24,6 +26,12 @@ const upstream = (id: string): UpstreamRecord => ({
   proxy_fallback_list: [],
   config: {},
   state: null,
+});
+
+describe('bot commands', () => {
+  it('keeps the secondary window test command hidden from the Telegram command list', () => {
+    expect(BOT_COMMANDS.map(command => command.command)).not.toContain(TEST_SECONDARY_WINDOW_COMMAND);
+  });
 });
 
 describe('parseNewKeyArgs', () => {

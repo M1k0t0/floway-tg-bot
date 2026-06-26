@@ -6,6 +6,7 @@ import {
   formatKeys,
   formatQuotaEstimate,
   formatQuotaEstimateInsufficient,
+  formatQuotaEstimateNotification,
   formatQuotaEstimateVerbose,
   formatSecondaryWindowNotification,
   formatStartHelp,
@@ -170,6 +171,35 @@ describe('formatters', () => {
     expect(text).toContain('<b>Your upstream tokens</b>: <b>100</b>');
     expect(text).toContain('<b>Your token share</b>: [||||           ] <b>25.0%</b>');
     expect(text).toContain('<b>Estimated your used</b>: [||||||||||||   ] <b>80.0%</b> of your equal share');
+  });
+
+  it('formats notification quota estimates without the command header or caveat', () => {
+    const report: UsageQuotaEstimate = {
+      window: {
+        label: 'Secondary window',
+        startAt: '2026-06-15T00:00:00.000Z',
+        endAt: '2026-06-22T00:00:00.000Z',
+        startHour: '2026-06-15T00',
+        endHour: '2026-06-22T00',
+      },
+      upstreamUsedPercent: 18,
+      user: { requests: 1, tokens: { input: 100 }, cost: 0.0001 },
+      upstream: { requests: 4, tokens: { input: 400 }, cost: 0.0004 },
+      userTokenSharePercent: 25,
+      userUpstreamQuotaSharePercent: 4.5,
+      nonAdminUserCount: 4,
+      equalSharePercent: 25,
+      estimatedUserUsedPercent: 18,
+    };
+
+    const text = formatQuotaEstimateNotification(report);
+
+    expect(text).toContain('<b>Upstream secondary used</b>:\n[|||            ] <b>18.0%</b>');
+    expect(text).toContain('<b>Estimated your used</b>:');
+    expect(text).toContain('(Assumed 4 users)');
+    expect(text).not.toContain('<b>Quota estimate</b>');
+    expect(text).not.toContain('Reset in ');
+    expect(text).not.toContain('Estimate only');
   });
 
   it('formats low-information quota estimates after a limit refresh', () => {

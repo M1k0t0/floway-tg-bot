@@ -156,7 +156,7 @@ export const formatUpstreamList = (upstreams: readonly UpstreamRecord[]): string
   return [blockTitle(`Floway upstreams (${upstreams.length})`), ...rows].join('\n\n');
 };
 
-export const formatUpstreamSelectionRequired = (command: 'upstream' | 'usage' | 'quota' | 'quota verbose', upstreams: readonly UpstreamRecord[]): string => {
+export const formatUpstreamSelectionRequired = (command: 'upstream' | 'usage' | 'quota' | 'quota verbose' | 'test_secondary_window', upstreams: readonly UpstreamRecord[]): string => {
   if (upstreams.length === 0) return blockTitle('No upstreams found.');
   return [
     blockTitle('Choose an upstream'),
@@ -313,6 +313,17 @@ export const formatQuotaEstimate = (upstream: UpstreamRecord, report: UsageQuota
   ].join('\n');
 };
 
+export const formatQuotaEstimateNotification = (report: UsageQuotaEstimate | null): string => {
+  if (!report) return 'Secondary quota estimate unavailable.';
+
+  return [
+    `${bold('Upstream secondary used')}:`,
+    formatProgressPercent(report.upstreamUsedPercent),
+    `${bold('Estimated your used')}:`,
+    `${formatProgressPercent(report.estimatedUserUsedPercent)} of your equal share (${html(`Assumed ${formatNumber(report.nonAdminUserCount)} users`)})`,
+  ].join('\n');
+};
+
 export const formatQuotaEstimateVerbose = (upstream: UpstreamRecord, report: UsageQuotaEstimate | null): string => {
   if (!report) {
     return [
@@ -344,6 +355,14 @@ export const formatQuotaEstimateInsufficient = (upstream: UpstreamRecord, window
     '',
     bold(upstream.name),
     `Reset in ${formatDurationUntil(windowEndAt)}`,
+    `${bold('Upstream secondary used')}:`,
+    formatProgressPercent(upstreamUsedPercent),
+    '',
+    'Not enough usage data yet. The limit probably just reset, so go make some requests.',
+  ].join('\n');
+
+export const formatQuotaEstimateInsufficientNotification = (upstreamUsedPercent: number): string =>
+  [
     `${bold('Upstream secondary used')}:`,
     formatProgressPercent(upstreamUsedPercent),
     '',

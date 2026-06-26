@@ -11,7 +11,10 @@ import {
   formatKeys,
   formatQuotaEstimate,
   formatQuotaEstimateInsufficient,
+  formatQuotaEstimateInsufficientNotification,
+  formatQuotaEstimateNotification,
   formatQuotaEstimateVerbose,
+  formatSecondaryWindowNotification,
   formatStartHelp,
   formatUpstreamDetail,
   formatUpstreamList,
@@ -33,6 +36,8 @@ import {
 import type { AppConfig, Binding, FlowayUser, UpstreamRecord } from './types.js';
 
 export { canShareUpstreamQuota } from './usage.js';
+
+export const TEST_SECONDARY_WINDOW_COMMAND = 'test_secondary_window';
 
 export const BOT_COMMANDS = [
   { command: 'start', description: 'Show bot usage help' },
@@ -333,6 +338,57 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
     }
   });
 
+  bot.command(TEST_SECONDARY_WINDOW_COMMAND, async ctx => {
+    if (!(await requirePrivate(ctx))) return;
+    const bound = await requireBinding(ctx, store, floway);
+    if (!bound) return;
+    const upstreamId = commandArgs(ctx).trim();
+
+    try {
+      const [upstreams, users] = await Promise.all([
+        floway.listUpstreams(),
+        floway.listUsers(),
+      ]);
+      const allowedUpstreams = filterUpstreamsForUser(upstreams, bound.user).filter(upstream => upstream.enabled);
+      const selection = selectUpstream(upstreamId, allowedUpstreams, TEST_SECONDARY_WINDOW_COMMAND);
+      if ('message' in selection) {
+        await replyLong(ctx, selection.message);
+        return;
+      }
+
+      const upstream = selection.upstream;
+      const secondaryWindow = computeWindowsFromQuota(upstream.codex_quota)
+        .find(window => window.label === 'Secondary window') ?? null;
+      if (!secondaryWindow) {
+        await replyLong(ctx, formatQuotaEstimate(upstream, null));
+        return;
+      }
+
+      const exportSnapshot = await floway.exportUsageSnapshot();
+      const usageReport = summarizeUsageWindow(
+        bound.binding.flowayUserId,
+        upstream.id,
+        secondaryWindow,
+        exportSnapshot,
+      );
+      const secondaryUsedPercent = upstream.codex_quota?.secondary_used_percent;
+      const quotaEstimate = formatSecondaryWindowQuotaEstimate(
+        bound.binding.flowayUserId,
+        upstream,
+        secondaryWindow,
+        secondaryUsedPercent,
+        exportSnapshot,
+        users,
+      );
+      await replyLong(ctx, [
+        '<b>Test notification</b>',
+        formatSecondaryWindowNotification(upstream, usageReport, quotaEstimate),
+      ].join('\n'));
+    } catch (error) {
+      await replyError(ctx, 'Failed to send secondary window test notification', error);
+    }
+  });
+
   bot.catch((error, ctx) => {
     console.error('Unhandled Telegram update error:', error);
     void ctx.reply('Internal bot error. Check bot logs.').catch(() => undefined);
@@ -513,7 +569,7 @@ export const filterUpstreamsForUser = (
 export const selectUpstream = (
   requestedId: string,
   upstreams: readonly UpstreamRecord[],
-  command: 'upstream' | 'usage' | 'quota' | 'quota verbose',
+  command: 'upstream' | 'usage' | 'quota' | 'quota verbose' | typeof TEST_SECONDARY_WINDOW_COMMAND,
 ): { upstream: UpstreamRecord } | { message: string } => {
   if (requestedId) {
     const upstream = upstreams.find(item => item.id === requestedId);
@@ -523,6 +579,29 @@ export const selectUpstream = (
   }
   if (upstreams.length === 1) return { upstream: upstreams[0]! };
   return { message: formatUpstreamSelectionRequired(command, upstreams) };
+};
+
+const formatSecondaryWindowQuotaEstimate = (
+  flowayUserId: number,
+  upstream: UpstreamRecord,
+  secondaryWindow: NonNullable<ReturnType<typeof computeWindowsFromQuota>[number]>,
+  secondaryUsedPercent: number | undefined,
+  exportSnapshot: Parameters<typeof summarizeUsageWindow>[3],
+  users: Awaited<ReturnType<FlowayClient['listUsers']>>,
+): string => {
+  if (secondaryUsedPercent === undefined) return formatQuotaEstimateNotification(null);
+  if (secondaryUsedPercent < 1) return formatQuotaEstimateInsufficientNotification(secondaryUsedPercent);
+
+  const nonAdminUserCount = users.filter(user => canShareUpstreamQuota(user, upstream.id)).length;
+  const report = summarizeUsageQuotaEstimate(
+    flowayUserId,
+    upstream.id,
+    secondaryWindow,
+    secondaryUsedPercent,
+    exportSnapshot,
+    nonAdminUserCount,
+  );
+  return formatQuotaEstimateNotification(report);
 };
 
 const htmlSafeText = (value: string): string => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

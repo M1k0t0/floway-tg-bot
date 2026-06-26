@@ -1,8 +1,8 @@
 import { BindingStore, type SecondaryWindowState } from './db.js';
 import { FlowayHttpError } from './floway-client.js';
 import {
-  formatQuotaEstimate,
-  formatQuotaEstimateInsufficient,
+  formatQuotaEstimateInsufficientNotification,
+  formatQuotaEstimateNotification,
   formatSecondaryWindowNotification,
   splitMessage,
 } from './format.js';
@@ -203,14 +203,9 @@ const formatCurrentQuotaEstimate = (
   users: readonly FlowayAdminUser[],
 ): string => {
   const upstreamUsedPercent = candidate.upstream.codex_quota?.secondary_used_percent;
-  if (upstreamUsedPercent === undefined) return formatQuotaEstimate(candidate.upstream, null);
+  if (upstreamUsedPercent === undefined) return formatQuotaEstimateNotification(null);
   if (upstreamUsedPercent < 1) {
-    return formatQuotaEstimateInsufficient(
-      candidate.upstream,
-      candidate.currentWindow.startAt,
-      candidate.currentWindow.endAt,
-      upstreamUsedPercent,
-    );
+    return formatQuotaEstimateInsufficientNotification(upstreamUsedPercent);
   }
 
   const nonAdminUserCount = users.filter(user => canShareUpstreamQuota(user, candidate.upstream.id)).length;
@@ -222,7 +217,7 @@ const formatCurrentQuotaEstimate = (
     snapshot,
     nonAdminUserCount,
   );
-  return formatQuotaEstimate(candidate.upstream, report);
+  return formatQuotaEstimateNotification(report);
 };
 
 const didWindowRefresh = (previous: SecondaryWindowState, current: UsageWindow): boolean => {

@@ -278,8 +278,8 @@ export const formatSecondaryWindowNotification = (
 ): string => [
   blockTitle('Secondary window refreshed'),
   `${bold(upstream.name)} ${code(upstream.id)}`,
+  '',
   label('Previous window', `${code(report.window.startAt)} -> ${code(report.window.endAt)}`),
-  label('Floway upstream used', bold(formatPercent(report.window.upstreamPercent))),
   label('Your share by tokens', bold(formatPercent(report.userTokenSharePercent))),
   label('Your share by requests', bold(formatPercent(report.userRequestSharePercent))),
   label('Your upstream tokens', `${bold(formatNumber(tokenTotal(report.user.tokens)))} (${formatTokenUsage(report.user.tokens)})`),

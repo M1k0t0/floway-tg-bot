@@ -88,7 +88,6 @@ describe('SecondaryWindowNotifier', () => {
     expect(messages[0]).toMatchObject({ chatId: '12345' });
     expect(messages[0]!.text).toContain('<b>Secondary window refreshed</b>');
     expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-15T00:00:00.000Z</code> -> <code>2026-06-22T00:00:00.000Z</code>');
-    expect(messages[0]!.text).toContain('<b>Floway upstream used</b>: <b>80.0%</b>');
     expect(messages[0]!.text).toContain('<b>Your upstream tokens</b>: <b>100</b>');
     expect(messages[0]!.text).toContain('<b>Upstream secondary used</b>:\n[||             ] <b>12.0%</b>');
     expect(messages[0]!.text).toContain('<b>Estimated your used</b>:');

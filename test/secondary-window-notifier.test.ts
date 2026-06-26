@@ -89,9 +89,14 @@ describe('SecondaryWindowNotifier', () => {
     expect(messages[0]!.text).toContain('<b>Secondary window refreshed</b>');
     expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-15T00:00:00.000Z</code> -> <code>2026-06-22T00:00:00.000Z</code>');
     expect(messages[0]!.text).toContain('<b>Your upstream tokens</b>: <b>100</b>');
+    expect(messages[0]!.text).toContain('<b>Upstream cost</b>: <b>$0.000100</b> / $0.000100');
     expect(messages[0]!.text).toContain('<b>Upstream secondary used</b>:\n[||             ] <b>12.0%</b>');
     expect(messages[0]!.text).toContain('<b>Estimated your used</b>:');
     expect(messages[0]!.text).toContain('(Assumed 2 users)');
+    expect(messages[0]!.text).not.toContain('<b>Your share by tokens</b>');
+    expect(messages[0]!.text).not.toContain('<b>Your share by requests</b>');
+    expect(messages[0]!.text).not.toContain('<b>Your upstream cost</b>');
+    expect(messages[0]!.text).not.toContain('<b>All upstream cost</b>');
     expect(messages[0]!.text).not.toContain('<b>Quota estimate</b>');
     expect(messages[0]!.text).not.toContain('Reset in ');
     expect(messages[0]!.text).not.toContain('Estimate only');

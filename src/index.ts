@@ -22,11 +22,27 @@ const secondaryWindowNotifier = new SecondaryWindowNotifier({
   intervalSeconds: config.secondaryWindowNotifyIntervalSeconds,
 });
 
+let shuttingDown = false;
+let storeClosed = false;
+
+const stopBot = (signal: string): void => {
+  try {
+    bot.stop(signal);
+  } catch (error) {
+    if (!(error instanceof Error && error.message === 'Bot is not running!')) throw error;
+  }
+};
+
 const shutdown = async (signal: string): Promise<void> => {
+  if (shuttingDown) return;
+  shuttingDown = true;
   console.log(`Received ${signal}, stopping bot`);
   secondaryWindowNotifier.stop();
-  bot.stop(signal);
-  store.close();
+  stopBot(signal);
+  if (!storeClosed) {
+    store.close();
+    storeClosed = true;
+  }
 };
 
 process.once('SIGINT', () => {
@@ -36,7 +52,13 @@ process.once('SIGTERM', () => {
   void shutdown('SIGTERM');
 });
 
-await registerBotCommands(bot);
-await bot.launch();
-secondaryWindowNotifier.start();
-console.log('Floway Telegram bot started');
+if (!shuttingDown) await registerBotCommands(bot);
+if (!shuttingDown) {
+  await bot.launch();
+}
+if (shuttingDown) {
+  stopBot('shutdown');
+} else {
+  secondaryWindowNotifier.start();
+  console.log('Floway Telegram bot started');
+}

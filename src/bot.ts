@@ -22,15 +22,17 @@ import {
 } from './format.js';
 import { FlowayClient, FlowayHttpError } from './floway-client.js';
 import {
+  canShareUpstreamQuota,
   computeWindowsFromQuota,
-  maxWindowRange,
   summarizeUsageLeaderboard,
   summarizeUsageQuotaEstimate,
   summarizeUsageWindow,
   type LeaderboardDays,
   type UsageWindowReport,
 } from './usage.js';
-import type { AppConfig, Binding, FlowayAdminUser, FlowayUser, UpstreamRecord } from './types.js';
+import type { AppConfig, Binding, FlowayUser, UpstreamRecord } from './types.js';
+
+export { canShareUpstreamQuota } from './usage.js';
 
 export const BOT_COMMANDS = [
   { command: 'start', description: 'Show bot usage help' },
@@ -52,6 +54,11 @@ export const BOT_COMMANDS = [
 export const registerBotCommands = async (bot: Telegraf): Promise<void> => {
   await bot.telegram.setMyCommands([...BOT_COMMANDS]);
 };
+
+interface BoundFlowaySession {
+  binding: Binding;
+  user: FlowayUser;
+}
 
 export const createBot = (config: AppConfig, store: BindingStore, floway: FlowayClient): Telegraf => {
   const bot = new Telegraf(config.telegramBotToken);
@@ -108,9 +115,9 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
 
   bot.command('me', async ctx => {
     if (!(await requirePrivate(ctx))) return;
-    const binding = await requireBinding(ctx, store, floway);
-    if (!binding) return;
-    await replyLong(ctx, formatBinding(binding));
+    const bound = await requireBinding(ctx, store, floway);
+    if (!bound) return;
+    await replyLong(ctx, formatBinding(bound.binding));
   });
 
   bot.command('info', async ctx => {
@@ -118,8 +125,11 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
   });
 
   bot.command('upstreams', async ctx => {
+    if (!(await requirePrivate(ctx))) return;
+    const bound = await requireBinding(ctx, store, floway);
+    if (!bound) return;
     try {
-      const upstreams = await floway.listUpstreams();
+      const upstreams = filterUpstreamsForUser(await floway.listUpstreams(), bound.user);
       await replyLong(ctx, formatUpstreamList(upstreams));
     } catch (error) {
       await replyError(ctx, 'Failed to load upstreams', error);
@@ -127,9 +137,12 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
   });
 
   bot.command('upstream', async ctx => {
+    if (!(await requirePrivate(ctx))) return;
+    const bound = await requireBinding(ctx, store, floway);
+    if (!bound) return;
     const id = commandArgs(ctx).trim();
     try {
-      const upstreams = await floway.listUpstreams();
+      const upstreams = filterUpstreamsForUser(await floway.listUpstreams(), bound.user);
       const selection = selectUpstream(id, upstreams, 'upstream');
       if ('message' in selection) {
         await replyLong(ctx, selection.message);
@@ -150,10 +163,10 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
 
   bot.command('keys', async ctx => {
     if (!(await requirePrivate(ctx))) return;
-    const binding = await requireBinding(ctx, store, floway);
-    if (!binding) return;
+    const bound = await requireBinding(ctx, store, floway);
+    if (!bound) return;
     try {
-      const keys = await floway.listKeys(binding.flowaySession);
+      const keys = await floway.listKeys(bound.binding.flowaySession);
       await replyLong(ctx, formatKeys(keys));
     } catch (error) {
       await replyError(ctx, 'Failed to load keys', error);
@@ -162,8 +175,8 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
 
   bot.command('newkey', async ctx => {
     if (!(await requirePrivate(ctx))) return;
-    const binding = await requireBinding(ctx, store, floway);
-    if (!binding) return;
+    const bound = await requireBinding(ctx, store, floway);
+    if (!bound) return;
     const args = commandArgs(ctx).trim();
     if (!args) {
       await ctx.reply('Usage: /newkey <name> [all|upstream_id[,upstream_id...]]');
@@ -171,13 +184,13 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
     }
 
     try {
-      const upstreams = await floway.listUpstreams();
+      const upstreams = filterUpstreamsForUser(await floway.listUpstreams(), bound.user);
       const parsed = parseNewKeyArgs(args, upstreams);
       if ('error' in parsed) {
         await ctx.reply(parsed.error);
         return;
       }
-      const key = await floway.createKey(binding.flowaySession, parsed.name, parsed.upstreamIds);
+      const key = await floway.createKey(bound.binding.flowaySession, parsed.name, parsed.upstreamIds);
       await replyLong(ctx, formatCreatedKey(key, 'created'));
     } catch (error) {
       await replyError(ctx, 'Failed to create key', error);
@@ -186,15 +199,15 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
 
   bot.command('delkey', async ctx => {
     if (!(await requirePrivate(ctx))) return;
-    const binding = await requireBinding(ctx, store, floway);
-    if (!binding) return;
+    const bound = await requireBinding(ctx, store, floway);
+    if (!bound) return;
     const id = commandArgs(ctx).trim();
     if (!id) {
       await ctx.reply('Usage: /delkey <key_id>');
       return;
     }
     try {
-      await floway.deleteKey(binding.flowaySession, id);
+      await floway.deleteKey(bound.binding.flowaySession, id);
       await ctx.reply(`Deleted key ${id}.`);
     } catch (error) {
       await replyError(ctx, 'Failed to delete key', error);
@@ -203,15 +216,15 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
 
   bot.command('rotatekey', async ctx => {
     if (!(await requirePrivate(ctx))) return;
-    const binding = await requireBinding(ctx, store, floway);
-    if (!binding) return;
+    const bound = await requireBinding(ctx, store, floway);
+    if (!bound) return;
     const id = commandArgs(ctx).trim();
     if (!id) {
       await ctx.reply('Usage: /rotatekey <key_id>');
       return;
     }
     try {
-      const key = await floway.rotateKey(binding.flowaySession, id);
+      const key = await floway.rotateKey(bound.binding.flowaySession, id);
       await replyLong(ctx, formatCreatedKey(key, 'rotated'));
     } catch (error) {
       await replyError(ctx, 'Failed to rotate key', error);
@@ -220,12 +233,12 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
 
   bot.command('usage', async ctx => {
     if (!(await requirePrivate(ctx))) return;
-    const binding = await requireBinding(ctx, store, floway);
-    if (!binding) return;
+    const bound = await requireBinding(ctx, store, floway);
+    if (!bound) return;
     const upstreamId = commandArgs(ctx).trim();
 
     try {
-      const upstreams = await floway.listUpstreams();
+      const upstreams = filterUpstreamsForUser(await floway.listUpstreams(), bound.user);
       const selection = selectUpstream(upstreamId, upstreams, 'usage');
       if ('message' in selection) {
         await replyLong(ctx, selection.message);
@@ -234,18 +247,14 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
       const upstream = selection.upstream;
 
       const windows = computeWindowsFromQuota(upstream.codex_quota);
-      const range = maxWindowRange(windows);
-      if (!range) {
+      if (windows.length === 0) {
         await replyLong(ctx, formatUsageReports(upstream, []));
         return;
       }
 
-      const [tokenUsage, exportSnapshot] = await Promise.all([
-        floway.getTokenUsage(binding.flowaySession, range.start, range.end),
-        floway.exportUsageSnapshot(),
-      ]);
+      const exportSnapshot = await floway.exportUsageSnapshot();
       const reports: UsageWindowReport[] = windows.map(window =>
-        summarizeUsageWindow(binding.flowayUserId, upstream.id, window, tokenUsage, exportSnapshot));
+        summarizeUsageWindow(bound.binding.flowayUserId, upstream.id, window, exportSnapshot));
       await replyLong(ctx, formatUsageReports(upstream, reports));
     } catch (error) {
       await replyError(ctx, 'Failed to load usage', error);
@@ -254,8 +263,8 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
 
   bot.command('quota', async ctx => {
     if (!(await requirePrivate(ctx))) return;
-    const binding = await requireBinding(ctx, store, floway);
-    if (!binding) return;
+    const bound = await requireBinding(ctx, store, floway);
+    if (!bound) return;
     const parsed = parseQuotaArgs(commandArgs(ctx));
     if ('error' in parsed) {
       await ctx.reply(parsed.error);
@@ -267,7 +276,8 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
         floway.listUpstreams(),
         floway.listUsers(),
       ]);
-      const selection = selectUpstream(parsed.upstreamId, upstreams, parsed.verbose ? 'quota verbose' : 'quota');
+      const allowedUpstreams = filterUpstreamsForUser(upstreams, bound.user);
+      const selection = selectUpstream(parsed.upstreamId, allowedUpstreams, parsed.verbose ? 'quota verbose' : 'quota');
       if ('message' in selection) {
         await replyLong(ctx, selection.message);
         return;
@@ -288,7 +298,7 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
       const exportSnapshot = await floway.exportUsageSnapshot();
       const nonAdminUserCount = users.filter(user => canShareUpstreamQuota(user, upstream.id)).length;
       const report = summarizeUsageQuotaEstimate(
-        binding.flowayUserId,
+        bound.binding.flowayUserId,
         upstream.id,
         secondaryWindow,
         secondaryUsedPercent,
@@ -308,17 +318,16 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
       await ctx.reply(parsed.error);
       return;
     }
-    const binding = await requireBinding(ctx, store, floway);
-    if (!binding) return;
+    const bound = await requireBinding(ctx, store, floway);
+    if (!bound) return;
 
     try {
-      const me = await floway.getMe(binding.flowaySession);
-      if (!canViewLeaderboard(me.user)) {
+      if (!canViewLeaderboard(bound.user)) {
         await ctx.reply('Global telemetry access is required to view the leaderboard.');
         return;
       }
       const exportSnapshot = await floway.exportUsageSnapshot();
-      await replyLong(ctx, formatUsageLeaderboard(summarizeUsageLeaderboard(exportSnapshot, parsed.days)));
+      await replyLong(ctx, formatUsageLeaderboard(summarizeUsageLeaderboard(exportSnapshot, parsed.days, 4, new Date(), bound.user.upstreamIds)));
     } catch (error) {
       await replyError(ctx, 'Failed to load leaderboard', error);
     }
@@ -390,7 +399,7 @@ const commandArgs = (ctx: Context): string => {
   return text.replace(/^\/[^\s]+(?:\s+)?/, '').trim();
 };
 
-const requireBinding = async (ctx: Context, store: BindingStore, floway: FlowayClient): Promise<Binding | null> => {
+const requireBinding = async (ctx: Context, store: BindingStore, floway: FlowayClient): Promise<BoundFlowaySession | null> => {
   const binding = store.get(telegramUserId(ctx));
   if (!binding) {
     await ctx.reply('Not bound. Use /bind <username> <password> in this private chat.');
@@ -398,15 +407,16 @@ const requireBinding = async (ctx: Context, store: BindingStore, floway: FlowayC
   }
   try {
     const me = await floway.getMe(binding.flowaySession);
+    let currentBinding = binding;
     if (me.user.id !== binding.flowayUserId || me.user.username !== binding.username) {
-      return store.upsert({
+      currentBinding = store.upsert({
         telegramUserId: binding.telegramUserId,
         flowayUserId: me.user.id,
         username: me.user.username,
         flowaySession: binding.flowaySession,
       });
     }
-    return binding;
+    return { binding: currentBinding, user: me.user };
   } catch (error) {
     if (error instanceof FlowayHttpError && error.status === 401) {
       store.delete(telegramUserId(ctx));
@@ -491,8 +501,14 @@ export const parseQuotaArgs = (args: string): { upstreamId: string; verbose: boo
 export const canViewLeaderboard = (user: Pick<FlowayUser, 'canViewGlobalTelemetry'>): boolean =>
   user.canViewGlobalTelemetry;
 
-export const canShareUpstreamQuota = (user: Pick<FlowayAdminUser, 'isAdmin' | 'upstreamIds'>, upstreamId: string): boolean =>
-  !user.isAdmin && (user.upstreamIds === null || user.upstreamIds.includes(upstreamId));
+export const filterUpstreamsForUser = (
+  upstreams: readonly UpstreamRecord[],
+  user: Pick<FlowayUser, 'upstreamIds'>,
+): UpstreamRecord[] => {
+  if (user.upstreamIds === null) return [...upstreams];
+  const allowed = new Set(user.upstreamIds);
+  return upstreams.filter(upstream => allowed.has(upstream.id));
+};
 
 export const selectUpstream = (
   requestedId: string,

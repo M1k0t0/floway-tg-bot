@@ -1,11 +1,10 @@
 import type {
   BillingDimension,
   CodexQuotaSnapshot,
-  DisplayUsageRecord,
+  FlowayAdminUser,
   ModelPricing,
   SanitizedExportSnapshot,
   TokenUsage,
-  TokenUsageResponse,
   UsageRecord,
 } from './types.js';
 
@@ -34,7 +33,6 @@ export interface UsageWindowReport {
   upstream: UsageTotals;
   userTokenSharePercent: number | null;
   userRequestSharePercent: number | null;
-  authoritativeUserCost: number;
 }
 
 export interface UsageTotals {
@@ -134,15 +132,6 @@ export const addUsageRecord = (totals: UsageTotals, record: UsageRecord): void =
   }
 };
 
-export const addDisplayUsageRecord = (totals: UsageTotals, record: DisplayUsageRecord): void => {
-  totals.requests += record.requests;
-  totals.cost += record.cost;
-  for (const dimension of BILLING_DIMENSIONS) {
-    const count = record.tokens[dimension] ?? 0;
-    if (count > 0) totals.tokens[dimension] = (totals.tokens[dimension] ?? 0) + count;
-  }
-};
-
 export const hourString = (date: Date): string => date.toISOString().slice(0, 13);
 
 export const computeWindowsFromQuota = (quota: CodexQuotaSnapshot | null | undefined): UsageWindow[] => {
@@ -159,7 +148,6 @@ export const summarizeUsageWindow = (
   flowayUserId: number,
   upstreamId: string,
   window: UsageWindow,
-  userUsage: TokenUsageResponse,
   snapshot: SanitizedExportSnapshot,
 ): UsageWindowReport => {
   const userKeyIds = new Set(snapshot.apiKeys.filter(key => key.userId === flowayUserId).map(key => key.id));
@@ -173,19 +161,12 @@ export const summarizeUsageWindow = (
     if (userKeyIds.has(record.keyId)) addUsageRecord(user, record);
   }
 
-  const authoritativeUser = emptyTotals();
-  for (const record of userUsage.records) {
-    if (record.hour < window.startHour || record.hour >= window.endHour) continue;
-    addDisplayUsageRecord(authoritativeUser, record);
-  }
-
   const upstreamTokens = tokenTotal(upstream.tokens);
   const userTokens = tokenTotal(user.tokens);
   return {
     window,
     user,
     upstream,
-    authoritativeUserCost: authoritativeUser.cost,
     userTokenSharePercent: upstreamTokens > 0 ? (userTokens / upstreamTokens) * 100 : null,
     userRequestSharePercent: upstream.requests > 0 ? (user.requests / upstream.requests) * 100 : null,
   };
@@ -196,6 +177,7 @@ export const summarizeUsageLeaderboard = (
   days: LeaderboardDays = 7,
   limit = 4,
   now = new Date(),
+  upstreamIds: readonly string[] | null = null,
 ): UsageLeaderboardReport => {
   const exportedAt = validDateOrFallback(snapshot.exportedAt, now);
   const startAt = new Date(exportedAt.getTime() - days * 24 * 60 * 60 * 1000);
@@ -204,8 +186,10 @@ export const summarizeUsageLeaderboard = (
   const usersById = new Map(snapshot.users.map(user => [user.id, user]));
   const userIdByKey = new Map(snapshot.apiKeys.map(key => [key.id, key.userId]));
   const entries = new Map<number, UsageLeaderboardEntry>();
+  const allowedUpstreams = upstreamIds === null ? null : new Set(upstreamIds);
 
   for (const record of snapshot.usage) {
+    if (allowedUpstreams && (!record.upstream || !allowedUpstreams.has(record.upstream))) continue;
     if (record.hour < startHour || record.hour >= endHour) continue;
     const userId = userIdByKey.get(record.keyId);
     if (userId === undefined) continue;
@@ -288,13 +272,8 @@ export const summarizeUsageQuotaEstimate = (
   };
 };
 
-export const maxWindowRange = (windows: readonly UsageWindow[]): { start: string; end: string } | null => {
-  if (windows.length === 0) return null;
-  return {
-    start: windows.reduce((min, window) => window.startHour < min ? window.startHour : min, windows[0]!.startHour),
-    end: windows.reduce((max, window) => window.endHour > max ? window.endHour : max, windows[0]!.endHour),
-  };
-};
+export const canShareUpstreamQuota = (user: Pick<FlowayAdminUser, 'isAdmin' | 'upstreamIds'>, upstreamId: string): boolean =>
+  !user.isAdmin && (user.upstreamIds === null || user.upstreamIds.includes(upstreamId));
 
 const compareByTokens = (a: UsageLeaderboardEntry, b: UsageLeaderboardEntry): number =>
   tokenTotal(b.totals.tokens) - tokenTotal(a.totals.tokens)

@@ -264,13 +264,32 @@ export const formatUsageReports = (upstream: UpstreamRecord, reports: readonly U
       label('Your upstream tokens', `${bold(formatNumber(tokenTotal(report.user.tokens)))} (${formatTokenUsage(report.user.tokens)})`),
       label('All upstream tokens', `${bold(formatNumber(tokenTotal(report.upstream.tokens)))} (${formatTokenUsage(report.upstream.tokens)})`),
       label('Requests', `${formatNumber(report.user.requests)} / ${formatNumber(report.upstream.requests)}`),
-      label('Your cost in window', bold(formatMoney(report.authoritativeUserCost))),
-      label('Your upstream cost', formatMoney(report.user.cost)),
+      label('Your upstream cost', bold(formatMoney(report.user.cost))),
       label('All upstream cost', formatMoney(report.upstream.cost)),
     );
   }
   return lines.join('\n');
 };
+
+export const formatSecondaryWindowNotification = (
+  upstream: UpstreamRecord,
+  report: UsageWindowReport,
+  quotaEstimate: string,
+): string => [
+  blockTitle('Secondary window refreshed'),
+  `${bold(upstream.name)} ${code(upstream.id)}`,
+  label('Previous window', `${code(report.window.startAt)} -> ${code(report.window.endAt)}`),
+  label('Floway upstream used', bold(formatPercent(report.window.upstreamPercent))),
+  label('Your share by tokens', bold(formatPercent(report.userTokenSharePercent))),
+  label('Your share by requests', bold(formatPercent(report.userRequestSharePercent))),
+  label('Your upstream tokens', `${bold(formatNumber(tokenTotal(report.user.tokens)))} (${formatTokenUsage(report.user.tokens)})`),
+  label('All upstream tokens', `${bold(formatNumber(tokenTotal(report.upstream.tokens)))} (${formatTokenUsage(report.upstream.tokens)})`),
+  label('Requests', `${formatNumber(report.user.requests)} / ${formatNumber(report.upstream.requests)}`),
+  label('Your upstream cost', bold(formatMoney(report.user.cost))),
+  label('All upstream cost', formatMoney(report.upstream.cost)),
+  '',
+  quotaEstimate,
+].join('\n');
 
 export const formatQuotaEstimate = (upstream: UpstreamRecord, report: UsageQuotaEstimate | null): string => {
   if (!report) {

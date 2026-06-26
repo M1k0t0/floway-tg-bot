@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   canShareUpstreamQuota,
   canViewLeaderboard,
+  filterUpstreamsForUser,
   parseLeaderboardArgs,
   parseNewKeyArgs,
   parseQuotaArgs,
@@ -89,6 +90,23 @@ describe('leaderboard permission', () => {
   it('requires global telemetry permission', () => {
     expect(canViewLeaderboard({ canViewGlobalTelemetry: true })).toBe(true);
     expect(canViewLeaderboard({ canViewGlobalTelemetry: false })).toBe(false);
+  });
+});
+
+describe('upstream permission filtering', () => {
+  const upstreams = [upstream('up_a'), upstream('up_b'), upstream('up_c')];
+
+  it('keeps all upstreams for users with unrestricted upstream access', () => {
+    expect(filterUpstreamsForUser(upstreams, { upstreamIds: null }).map(item => item.id)).toEqual(['up_a', 'up_b', 'up_c']);
+  });
+
+  it('keeps only upstreams listed on the bound user', () => {
+    expect(filterUpstreamsForUser(upstreams, { upstreamIds: ['up_b'] }).map(item => item.id)).toEqual(['up_b']);
+  });
+
+  it('hides explicitly requested upstreams outside the bound user access list', () => {
+    const allowed = filterUpstreamsForUser(upstreams, { upstreamIds: ['up_a'] });
+    expect(selectUpstream('up_b', allowed, 'usage')).toEqual({ message: 'Upstream not found: up_b' });
   });
 });
 

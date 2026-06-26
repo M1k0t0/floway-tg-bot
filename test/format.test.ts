@@ -7,12 +7,13 @@ import {
   formatQuotaEstimate,
   formatQuotaEstimateInsufficient,
   formatQuotaEstimateVerbose,
+  formatSecondaryWindowNotification,
   formatStartHelp,
   formatUpstreamList,
   formatUsageLeaderboard,
 } from '../src/format.js';
 import type { ApiKeyRecord, Binding, UpstreamRecord } from '../src/types.js';
-import type { UsageLeaderboardReport, UsageQuotaEstimate } from '../src/usage.js';
+import type { UsageLeaderboardReport, UsageQuotaEstimate, UsageWindowReport } from '../src/usage.js';
 
 describe('formatters', () => {
   it('escapes dynamic upstream fields for Telegram HTML', () => {
@@ -231,5 +232,45 @@ describe('formatters', () => {
     expect(text).toContain('1. <b>alice &lt;prod&gt;&amp;</b> - <b>$0.123456</b> | <b>50.0%</b>');
     expect(text).toContain('1. <b>alice &lt;prod&gt;&amp;</b> - <b>33.3%</b> cache | <b>25.0%</b> cached share');
     expect(text).not.toContain('tokens | $');
+  });
+
+  it('formats secondary window refresh notifications', () => {
+    const upstream: UpstreamRecord = {
+      id: 'up_a',
+      provider: 'codex',
+      name: 'Codex <main>&',
+      enabled: true,
+      sort_order: 1,
+      created_at: '2026-06-21T00:00:00.000Z',
+      updated_at: '2026-06-21T00:00:00.000Z',
+      flag_overrides: {},
+      disabled_public_model_ids: [],
+      proxy_fallback_list: [],
+      config: {},
+      state: null,
+    };
+    const report: UsageWindowReport = {
+      window: {
+        label: 'Secondary window',
+        startAt: '2026-06-15T00:00:00.000Z',
+        endAt: '2026-06-22T00:00:00.000Z',
+        startHour: '2026-06-15T00',
+        endHour: '2026-06-22T00',
+        upstreamPercent: 80,
+      },
+      user: { requests: 1, tokens: { input: 100 }, cost: 0.0001 },
+      upstream: { requests: 4, tokens: { input: 400 }, cost: 0.0004 },
+      userTokenSharePercent: 25,
+      userRequestSharePercent: 25,
+    };
+
+    const text = formatSecondaryWindowNotification(upstream, report, '<b>Quota estimate</b>');
+
+    expect(text).toContain('<b>Secondary window refreshed</b>');
+    expect(text).toContain('<b>Codex &lt;main&gt;&amp;</b> <code>up_a</code>');
+    expect(text).toContain('<b>Floway upstream used</b>: <b>80.0%</b>');
+    expect(text).toContain('<b>Your upstream tokens</b>: <b>100</b>');
+    expect(text).toContain('<b>Your upstream cost</b>: <b>$0.000100</b>');
+    expect(text).toContain('\n\n<b>Quota estimate</b>');
   });
 });

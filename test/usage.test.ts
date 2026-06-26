@@ -8,7 +8,7 @@ import {
   summarizeUsageWindow,
   unitPriceForDimension,
 } from '../src/usage.js';
-import type { SanitizedExportSnapshot, TokenUsageResponse, UsageRecord } from '../src/types.js';
+import type { SanitizedExportSnapshot, UsageRecord } from '../src/types.js';
 
 describe('usage windows', () => {
   it('derives Floway hour buckets from Codex quota reset windows', () => {
@@ -65,7 +65,7 @@ describe('usage cost', () => {
 });
 
 describe('usage summary', () => {
-  it('uses raw export usage for upstream shares and user session usage for authoritative cost', () => {
+  it('uses raw export usage for selected-upstream shares and cost', () => {
     const snapshot: SanitizedExportSnapshot = {
       exportedAt: '2026-06-21T00:00:00.000Z',
       users: [{ id: 7, username: 'alice', deletedAt: null }],
@@ -80,13 +80,6 @@ describe('usage summary', () => {
         { keyId: 'k1', model: 'm', upstream: 'up1', modelKey: 'm', hour: '2026-06-21T05', requests: 100, tokens: { input: 999 }, cost: { input: 1 } },
       ],
     };
-    const userUsage: TokenUsageResponse = {
-      records: [
-        { keyId: 'k1', model: 'm', hour: '2026-06-21T01', requests: 2, tokens: { input: 100 }, cost: 12.34 },
-        { keyId: 'k1', model: 'm', hour: '2026-06-21T05', requests: 2, tokens: { input: 100 }, cost: 99 },
-      ],
-      keys: [{ id: 'k1', name: 'A', createdAt: '2026-06-20T00:00:00.000Z' }],
-    };
 
     const report = summarizeUsageWindow(7, 'up1', {
       label: 'Primary window',
@@ -94,13 +87,13 @@ describe('usage summary', () => {
       endAt: '2026-06-21T05:00:00.000Z',
       startHour: '2026-06-21T00',
       endHour: '2026-06-21T05',
-    }, userUsage, snapshot);
+    }, snapshot);
 
     expect(report.user.requests).toBe(2);
     expect(report.upstream.requests).toBe(8);
     expect(report.userTokenSharePercent).toBe(25);
     expect(report.userRequestSharePercent).toBe(25);
-    expect(report.authoritativeUserCost).toBe(12.34);
+    expect(report.user.cost).toBe(0.0001);
   });
 
   it('handles zero upstream totals without percentages', () => {
@@ -110,7 +103,7 @@ describe('usage summary', () => {
       endAt: '2026-06-21T01:00:00.000Z',
       startHour: '2026-06-21T00',
       endHour: '2026-06-21T01',
-    }, { records: [], keys: [] }, { exportedAt: 'x', users: [], apiKeys: [], usage: [] });
+    }, { exportedAt: 'x', users: [], apiKeys: [], usage: [] });
     expect(report.userTokenSharePercent).toBeNull();
     expect(report.userRequestSharePercent).toBeNull();
   });
@@ -226,6 +219,32 @@ describe('usage leaderboard', () => {
     expect(oneDayReport.totals.tokens).toBe(400);
     expect(oneDayReport.totals.cost).toBeCloseTo(0.0062);
     expect(oneDayReport.totals.cacheReadTokens).toBe(190);
+  });
+
+  it('limits leaderboard records to the bound user upstream access list', () => {
+    const snapshot: SanitizedExportSnapshot = {
+      exportedAt: '2026-06-22T12:34:00.000Z',
+      users: [
+        { id: 1, username: 'alice', deletedAt: null },
+        { id: 2, username: 'bob', deletedAt: null },
+        { id: 3, username: 'carol', deletedAt: null },
+      ],
+      apiKeys: [
+        { id: 'k1', userId: 1, name: 'A', createdAt: '2026-06-01T00:00:00.000Z', upstreamIds: null, deletedAt: null },
+        { id: 'k2', userId: 2, name: 'B', createdAt: '2026-06-01T00:00:00.000Z', upstreamIds: null, deletedAt: null },
+        { id: 'k3', userId: 3, name: 'C', createdAt: '2026-06-01T00:00:00.000Z', upstreamIds: null, deletedAt: null },
+      ],
+      usage: [
+        { keyId: 'k1', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-22T12', requests: 1, tokens: { input: 100 }, cost: null },
+        { keyId: 'k2', model: 'm', upstream: 'up_b', modelKey: 'm', hour: '2026-06-22T12', requests: 1, tokens: { input: 1000 }, cost: null },
+        { keyId: 'k3', model: 'm', upstream: null, modelKey: 'm', hour: '2026-06-22T12', requests: 1, tokens: { input: 500 }, cost: null },
+      ],
+    };
+
+    const report = summarizeUsageLeaderboard(snapshot, 7, 4, new Date('2026-06-22T12:34:00.000Z'), ['up_a']);
+
+    expect(report.byTokens.map(entry => entry.username)).toEqual(['alice']);
+    expect(report.totals.tokens).toBe(100);
   });
 });
 

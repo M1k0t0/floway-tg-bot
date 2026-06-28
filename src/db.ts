@@ -199,6 +199,27 @@ export class BindingStore {
     return row ? secondaryWindowNotificationFromRow(row) : null;
   }
 
+  getSecondaryWindowNotificationByHour(
+    telegramUserId: string,
+    upstreamId: string,
+    windowStartHour: string,
+    resetAfterHour: string,
+  ): SecondaryWindowNotification | null {
+    const row = this.db
+      .prepare(`
+        SELECT telegram_user_id, upstream_id, window_start_at, reset_after_at, sent_at
+        FROM secondary_window_notification
+        WHERE telegram_user_id = ?
+          AND upstream_id = ?
+          AND substr(window_start_at, 1, 13) = ?
+          AND substr(reset_after_at, 1, 13) = ?
+        ORDER BY sent_at DESC
+        LIMIT 1
+      `)
+      .get(telegramUserId, upstreamId, windowStartHour, resetAfterHour) as SecondaryWindowNotificationRow | undefined;
+    return row ? secondaryWindowNotificationFromRow(row) : null;
+  }
+
   upsertSecondaryWindowNotification(input: Omit<SecondaryWindowNotification, 'sentAt'>): SecondaryWindowNotification {
     const sentAt = new Date().toISOString();
     this.db

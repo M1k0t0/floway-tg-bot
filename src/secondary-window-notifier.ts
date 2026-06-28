@@ -1,4 +1,4 @@
-import { BindingStore, type SecondaryWindowState } from './db.js';
+import { BindingStore, type SecondaryWindowNotification, type SecondaryWindowState } from './db.js';
 import { FlowayHttpError } from './floway-client.js';
 import {
   formatQuotaEstimateInsufficientNotification,
@@ -97,6 +97,7 @@ export class SecondaryWindowNotifier {
   }
 
   private async poll(): Promise<void> {
+    const now = new Date();
     const upstreams = await this.options.floway.listUpstreams();
     const candidates: NotificationCandidate[] = [];
 
@@ -113,12 +114,8 @@ export class SecondaryWindowNotifier {
       for (const upstream of allowedUpstreams) {
         const previous = this.options.store.getSecondaryWindowState(bound.binding.telegramUserId, upstream.id);
         const currentWindow = secondaryWindowForUpstream(upstream);
-        if (!currentWindow) {
-          if (!canUseMissingCodexQuotaState(upstream)) {
-            this.options.store.deleteSecondaryWindowState(bound.binding.telegramUserId, upstream.id);
-            continue;
-          }
-          const elapsed = previous ? elapsedWindowRefreshFromState(previous) : null;
+        if (currentWindow && isWindowFromFuture(currentWindow, now)) {
+          const elapsed = previous ? elapsedWindowRefreshFromState(previous, now) : null;
           if (elapsed) {
             this.enqueueOrApplySentNotification(candidates, {
               binding: bound.binding,
@@ -129,7 +126,38 @@ export class SecondaryWindowNotifier {
             });
           } else if (previous) {
             const storedWindow = windowFromState(previous);
-            const previousWindow = shouldBackfillCompletedWindow(bound.binding, storedWindow)
+            const previousWindow = shouldBackfillCompletedWindow(bound.binding, storedWindow, now)
+              ? completedWindowBefore(storedWindow)
+              : null;
+            if (previousWindow) {
+              this.enqueueOrApplySentNotification(candidates, {
+                binding: bound.binding,
+                upstream,
+                previousWindow,
+                currentWindow: storedWindow,
+                currentState: windowState(bound.binding, upstream.id, storedWindow, previous.usedPercent),
+              });
+            }
+          }
+          continue;
+        }
+        if (!currentWindow) {
+          if (!canUseMissingCodexQuotaState(upstream)) {
+            this.options.store.deleteSecondaryWindowState(bound.binding.telegramUserId, upstream.id);
+            continue;
+          }
+          const elapsed = previous ? elapsedWindowRefreshFromState(previous, now) : null;
+          if (elapsed) {
+            this.enqueueOrApplySentNotification(candidates, {
+              binding: bound.binding,
+              upstream,
+              previousWindow: elapsed.previousWindow,
+              currentWindow: elapsed.currentWindow,
+              currentState: windowState(bound.binding, upstream.id, elapsed.currentWindow, null),
+            });
+          } else if (previous) {
+            const storedWindow = windowFromState(previous);
+            const previousWindow = shouldBackfillCompletedWindow(bound.binding, storedWindow, now)
               ? completedWindowBefore(storedWindow)
               : null;
             if (previousWindow) {
@@ -157,7 +185,7 @@ export class SecondaryWindowNotifier {
             currentState,
           });
         } else if (previous) {
-          const elapsed = elapsedWindowRefreshFromState(previous);
+          const elapsed = elapsedWindowRefreshFromState(previous, now);
           if (elapsed) {
             this.enqueueOrApplySentNotification(candidates, {
               binding: bound.binding,
@@ -168,7 +196,7 @@ export class SecondaryWindowNotifier {
             });
           } else {
             const storedWindow = windowFromState(previous);
-            const previousWindow = shouldBackfillCompletedWindow(bound.binding, storedWindow)
+            const previousWindow = shouldBackfillCompletedWindow(bound.binding, storedWindow, now)
               ? completedWindowBefore(storedWindow)
               : null;
             if (previousWindow) {
@@ -187,7 +215,7 @@ export class SecondaryWindowNotifier {
             }
           }
         } else {
-          const elapsed = elapsedWindowRefresh(currentWindow, new Date());
+          const elapsed = elapsedWindowRefresh(currentWindow, now);
           if (elapsed) {
             const elapsedState = windowState(bound.binding, upstream.id, elapsed.currentWindow, null);
             if (wasBoundBeforeWindowEnded(bound.binding, elapsed.previousWindow)) {
@@ -201,7 +229,7 @@ export class SecondaryWindowNotifier {
             } else {
               this.options.store.upsertSecondaryWindowState(elapsedState);
             }
-          } else if (shouldCatchUpMissingState(bound.binding, currentWindow)) {
+          } else if (shouldCatchUpMissingState(bound.binding, currentWindow, now)) {
             const previousWindow = completedWindowBefore(currentWindow);
             if (previousWindow) {
               this.enqueueOrApplySentNotification(candidates, {
@@ -284,13 +312,13 @@ export class SecondaryWindowNotifier {
   }
 
   private enqueueOrApplySentNotification(candidates: NotificationCandidate[], candidate: NotificationCandidate): void {
-    const sent = this.options.store.getSecondaryWindowNotification(
+    const sent = this.options.store.getSecondaryWindowNotificationByHour(
       candidate.binding.telegramUserId,
       candidate.upstream.id,
-      candidate.previousWindow.startAt,
-      candidate.previousWindow.endAt,
+      candidate.previousWindow.startHour,
+      candidate.previousWindow.endHour,
     );
-    if (!sent) {
+    if (!sent || !wasNotificationSentAfterWindowEnded(sent, candidate.previousWindow)) {
       candidates.push(candidate);
       return;
     }
@@ -351,6 +379,21 @@ const isWindowAtLeast = (previous: SecondaryWindowState, current: UsageWindow): 
 
 const isSameWindow = (left: UsageWindow, right: UsageWindow): boolean =>
   left.startAt === right.startAt && left.endAt === right.endAt;
+
+const isWindowFromFuture = (window: UsageWindow, now: Date): boolean => {
+  const startAt = new Date(window.startAt).getTime();
+  const nowMs = now.getTime();
+  return Number.isFinite(startAt) && Number.isFinite(nowMs) && startAt > nowMs;
+};
+
+const wasNotificationSentAfterWindowEnded = (
+  notification: Pick<SecondaryWindowNotification, 'sentAt'>,
+  window: UsageWindow,
+): boolean => {
+  const sentAt = new Date(notification.sentAt).getTime();
+  const endAt = new Date(window.endAt).getTime();
+  return Number.isFinite(sentAt) && Number.isFinite(endAt) && sentAt >= endAt;
+};
 
 const windowToReport = (previous: SecondaryWindowState, current: UsageWindow): UsageWindow => {
   const completed = completedWindowBefore(current);

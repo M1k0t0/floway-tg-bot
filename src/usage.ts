@@ -5,6 +5,7 @@ import type {
   ModelPricing,
   SanitizedExportSnapshot,
   TokenUsage,
+  UpstreamRecord,
   UsageRecord,
 } from './types.js';
 
@@ -79,6 +80,17 @@ export interface UsageQuotaEstimate {
   estimatedUserUsedPercent: number | null;
 }
 
+type WindowQuotaSnapshot = Pick<
+  CodexQuotaSnapshot,
+  | 'observed_at'
+  | 'primary_used_percent'
+  | 'primary_window_minutes'
+  | 'primary_reset_after_at'
+  | 'secondary_used_percent'
+  | 'secondary_window_minutes'
+  | 'secondary_reset_after_at'
+>;
+
 export const unitPriceForDimension = (pricing: ModelPricing | null, dimension: BillingDimension): number | null => {
   if (!pricing) return null;
   switch (dimension) {
@@ -134,7 +146,19 @@ export const addUsageRecord = (totals: UsageTotals, record: UsageRecord): void =
 
 export const hourString = (date: Date): string => date.toISOString().slice(0, 13);
 
-export const computeWindowsFromQuota = (quota: CodexQuotaSnapshot | null | undefined): UsageWindow[] => {
+export const computeWindowsForUpstream = (upstream: Pick<UpstreamRecord, 'provider' | 'codex_quota'>): UsageWindow[] =>
+  computeWindowsFromQuota(quotaWindowSnapshotForUpstream(upstream));
+
+export const quotaWindowSnapshotForUpstream = (upstream: Pick<UpstreamRecord, 'provider' | 'codex_quota'>): WindowQuotaSnapshot | null => {
+  switch (upstream.provider) {
+  case 'codex':
+    return upstream.codex_quota ?? null;
+  default:
+    return null;
+  }
+};
+
+export const computeWindowsFromQuota = (quota: WindowQuotaSnapshot | null | undefined): UsageWindow[] => {
   if (!quota) return [];
   const windows: UsageWindow[] = [];
   const primary = quotaWindow('Primary window', quota.primary_window_minutes, quota.primary_reset_after_at, quota.primary_used_percent);

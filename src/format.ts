@@ -148,8 +148,9 @@ export const formatUpstreamList = (upstreams: readonly UpstreamRecord[]): string
     .sort((a, b) => a.sort_order - b.sort_order)
     .map(upstream => {
       const status = upstream.enabled ? 'enabled' : 'disabled';
-      const quotaLine = upstream.codex_quota
-        ? `\n   primary ${bold(formatPercent(upstream.codex_quota.primary_used_percent))}, secondary ${bold(formatPercent(upstream.codex_quota.secondary_used_percent))}`
+      const codexQuota = codexQuotaForDisplay(upstream);
+      const quotaLine = codexQuota
+        ? `\n   primary ${bold(formatPercent(codexQuota.primary_used_percent))}, secondary ${bold(formatPercent(codexQuota.secondary_used_percent))}`
         : '';
       return `${upstream.sort_order}. ${bold(upstream.name)} ${code(upstream.id)}\n   ${code(upstream.provider)} | ${status}${quotaLine}`;
     });
@@ -183,25 +184,26 @@ export const formatUpstreamDetail = (
     label('Models cache', formatModelsCache(upstream)),
   ];
 
-  if (upstream.codex_quota) {
+  const codexQuota = codexQuotaForDisplay(upstream);
+  if (codexQuota) {
     lines.push(
       '',
       blockTitle('Codex quota'),
-      label('Observed', code(upstream.codex_quota.observed_at)),
+      label('Observed', code(codexQuota.observed_at)),
       label('Primary', [
-        bold(formatPercent(upstream.codex_quota.primary_used_percent)),
-        upstream.codex_quota.primary_window_minutes ? `${formatNumber(upstream.codex_quota.primary_window_minutes)} min` : null,
-        upstream.codex_quota.primary_reset_after_at ? `resets ${code(upstream.codex_quota.primary_reset_after_at)}` : null,
+        bold(formatPercent(codexQuota.primary_used_percent)),
+        codexQuota.primary_window_minutes ? `${formatNumber(codexQuota.primary_window_minutes)} min` : null,
+        codexQuota.primary_reset_after_at ? `resets ${code(codexQuota.primary_reset_after_at)}` : null,
       ].filter(Boolean).join(' | ')),
       label('Secondary', [
-        bold(formatPercent(upstream.codex_quota.secondary_used_percent)),
-        upstream.codex_quota.secondary_window_minutes ? `${formatNumber(upstream.codex_quota.secondary_window_minutes)} min` : null,
-        upstream.codex_quota.secondary_reset_after_at ? `resets ${code(upstream.codex_quota.secondary_reset_after_at)}` : null,
+        bold(formatPercent(codexQuota.secondary_used_percent)),
+        codexQuota.secondary_window_minutes ? `${formatNumber(codexQuota.secondary_window_minutes)} min` : null,
+        codexQuota.secondary_reset_after_at ? `resets ${code(codexQuota.secondary_reset_after_at)}` : null,
       ].filter(Boolean).join(' | ')),
     );
-    if (upstream.codex_quota.active_limit) lines.push(label('Active limit', code(upstream.codex_quota.active_limit)));
-    if (upstream.codex_quota.credits_balance !== undefined) lines.push(label('Credits', code(upstream.codex_quota.credits_balance)));
-    if (upstream.codex_quota.ratelimited_until) lines.push(label('Rate-limited until', code(upstream.codex_quota.ratelimited_until)));
+    if (codexQuota.active_limit) lines.push(label('Active limit', code(codexQuota.active_limit)));
+    if (codexQuota.credits_balance !== undefined) lines.push(label('Credits', code(codexQuota.credits_balance)));
+    if (codexQuota.ratelimited_until) lines.push(label('Rate-limited until', code(codexQuota.ratelimited_until)));
   }
 
   if (copilotQuota) {
@@ -422,6 +424,9 @@ const formatLeaderboardShare = (
 
 const sharePercent = (value: number, total: number): number | null =>
   total > 0 ? (value / total) * 100 : null;
+
+const codexQuotaForDisplay = (upstream: UpstreamRecord): UpstreamRecord['codex_quota'] =>
+  upstream.provider === 'codex' ? upstream.codex_quota ?? null : null;
 
 const formatDurationUntil = (value: string, now = new Date()): string => {
   const end = new Date(value);

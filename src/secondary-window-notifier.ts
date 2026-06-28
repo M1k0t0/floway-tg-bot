@@ -8,7 +8,7 @@ import {
 } from './format.js';
 import {
   canShareUpstreamQuota,
-  computeWindowsFromQuota,
+  computeWindowsForUpstream,
   hourString,
   summarizeUsageQuotaEstimate,
   summarizeUsageWindow,
@@ -49,6 +49,11 @@ interface NotificationCandidate {
   previousWindow: UsageWindow;
   currentWindow: UsageWindow;
   currentState: Omit<SecondaryWindowState, 'updatedAt'>;
+}
+
+interface WindowRefresh {
+  previousWindow: UsageWindow;
+  currentWindow: UsageWindow;
 }
 
 export class SecondaryWindowNotifier {
@@ -98,31 +103,81 @@ export class SecondaryWindowNotifier {
       );
 
       for (const upstream of allowedUpstreams) {
+        const previous = this.options.store.getSecondaryWindowState(bound.binding.telegramUserId, upstream.id);
         const currentWindow = secondaryWindowForUpstream(upstream);
         if (!currentWindow) {
-          this.options.store.deleteSecondaryWindowState(bound.binding.telegramUserId, upstream.id);
+          if (!canUseMissingCodexQuotaState(upstream)) {
+            this.options.store.deleteSecondaryWindowState(bound.binding.telegramUserId, upstream.id);
+            continue;
+          }
+          const elapsed = previous ? elapsedWindowRefreshFromState(previous) : null;
+          if (elapsed) {
+            candidates.push({
+              binding: bound.binding,
+              upstream,
+              previousWindow: elapsed.previousWindow,
+              currentWindow: elapsed.currentWindow,
+              currentState: windowState(bound.binding, upstream.id, elapsed.currentWindow, null),
+            });
+          }
           continue;
         }
 
-        const previous = this.options.store.getSecondaryWindowState(bound.binding.telegramUserId, upstream.id);
-        const currentState = {
-          telegramUserId: bound.binding.telegramUserId,
-          upstreamId: upstream.id,
-          windowStartAt: currentWindow.startAt,
-          resetAfterAt: currentWindow.endAt,
-          usedPercent: currentWindow.upstreamPercent ?? null,
-        };
+        const currentState = windowState(bound.binding, upstream.id, currentWindow, currentWindow.upstreamPercent ?? null);
 
         if (previous && didWindowRefresh(previous, currentWindow)) {
+          const previousWindow = windowToReport(previous, currentWindow);
           candidates.push({
             binding: bound.binding,
             upstream,
-            previousWindow: windowFromState(previous),
+            previousWindow,
             currentWindow,
             currentState,
           });
+        } else if (previous) {
+          const elapsed = elapsedWindowRefreshFromState(previous);
+          if (elapsed) {
+            candidates.push({
+              binding: bound.binding,
+              upstream,
+              previousWindow: elapsed.previousWindow,
+              currentWindow: elapsed.currentWindow,
+              currentState: windowState(bound.binding, upstream.id, elapsed.currentWindow, null),
+            });
+          } else if (isWindowAtLeast(previous, currentWindow)) {
+            this.options.store.upsertSecondaryWindowState(currentState);
+          }
         } else {
-          this.options.store.upsertSecondaryWindowState(currentState);
+          const elapsed = elapsedWindowRefresh(currentWindow, new Date());
+          if (elapsed) {
+            const elapsedState = windowState(bound.binding, upstream.id, elapsed.currentWindow, null);
+            if (wasBoundBeforeWindowEnded(bound.binding, elapsed.previousWindow)) {
+              candidates.push({
+                binding: bound.binding,
+                upstream,
+                previousWindow: elapsed.previousWindow,
+                currentWindow: elapsed.currentWindow,
+                currentState: elapsedState,
+              });
+            } else {
+              this.options.store.upsertSecondaryWindowState(elapsedState);
+            }
+          } else if (shouldCatchUpMissingState(bound.binding, currentWindow)) {
+            const previousWindow = completedWindowBefore(currentWindow);
+            if (previousWindow) {
+              candidates.push({
+                binding: bound.binding,
+                upstream,
+                previousWindow,
+                currentWindow,
+                currentState,
+              });
+            } else {
+              this.options.store.upsertSecondaryWindowState(currentState);
+            }
+          } else {
+            this.options.store.upsertSecondaryWindowState(currentState);
+          }
         }
       }
     }
@@ -176,7 +231,7 @@ export class SecondaryWindowNotifier {
       candidate.previousWindow,
       snapshot,
     );
-    const quotaEstimate = formatCurrentQuotaEstimate(candidate, snapshot, users);
+    const quotaEstimate = formatPreviousQuotaEstimate(candidate, snapshot, users);
     const text = formatSecondaryWindowNotification(candidate.upstream, report, quotaEstimate);
     for (const chunk of splitMessage(text)) {
       await this.options.bot.telegram.sendMessage(candidate.binding.telegramUserId, chunk, { parse_mode: 'HTML' });
@@ -195,14 +250,17 @@ const filterUsableUpstreamsForUser = (
 };
 
 const secondaryWindowForUpstream = (upstream: UpstreamRecord): UsageWindow | null =>
-  computeWindowsFromQuota(upstream.codex_quota).find(window => window.label === 'Secondary window') ?? null;
+  computeWindowsForUpstream(upstream).find(window => window.label === 'Secondary window') ?? null;
 
-const formatCurrentQuotaEstimate = (
+const canUseMissingCodexQuotaState = (upstream: UpstreamRecord): boolean =>
+  upstream.provider === 'codex' && !upstream.codex_quota;
+
+const formatPreviousQuotaEstimate = (
   candidate: NotificationCandidate,
   snapshot: SanitizedExportSnapshot,
   users: readonly FlowayAdminUser[],
 ): string => {
-  const upstreamUsedPercent = candidate.upstream.codex_quota?.secondary_used_percent;
+  const upstreamUsedPercent = candidate.previousWindow.upstreamPercent;
   if (upstreamUsedPercent === undefined) return formatQuotaEstimateNotification(null);
   if (upstreamUsedPercent < 1) {
     return formatQuotaEstimateInsufficientNotification(upstreamUsedPercent);
@@ -212,7 +270,7 @@ const formatCurrentQuotaEstimate = (
   const report = summarizeUsageQuotaEstimate(
     candidate.binding.flowayUserId,
     candidate.upstream.id,
-    candidate.currentWindow,
+    candidate.previousWindow,
     upstreamUsedPercent,
     snapshot,
     nonAdminUserCount,
@@ -226,6 +284,94 @@ const didWindowRefresh = (previous: SecondaryWindowState, current: UsageWindow):
   return Number.isFinite(previousEnd) && Number.isFinite(currentEnd) && currentEnd > previousEnd;
 };
 
+const isWindowAtLeast = (previous: SecondaryWindowState, current: UsageWindow): boolean => {
+  const previousEnd = new Date(previous.resetAfterAt).getTime();
+  const currentEnd = new Date(current.endAt).getTime();
+  return Number.isFinite(previousEnd) && Number.isFinite(currentEnd) && currentEnd >= previousEnd;
+};
+
+const windowToReport = (previous: SecondaryWindowState, current: UsageWindow): UsageWindow => {
+  const completed = completedWindowBefore(current);
+  if (!completed) return windowFromState(previous);
+
+  const previousEnd = new Date(previous.resetAfterAt).getTime();
+  const completedEnd = new Date(completed.endAt).getTime();
+  if (Number.isFinite(previousEnd) && Number.isFinite(completedEnd) && completedEnd > previousEnd) {
+    return completed;
+  }
+  return windowFromState(previous);
+};
+
+const elapsedWindowRefreshFromState = (previous: SecondaryWindowState, now = new Date()): WindowRefresh | null =>
+  elapsedWindowRefresh(windowFromState(previous), now);
+
+const elapsedWindowRefresh = (knownWindow: UsageWindow, now: Date): WindowRefresh | null => {
+  const start = new Date(knownWindow.startAt);
+  const end = new Date(knownWindow.endAt);
+  const startMs = start.getTime();
+  const endMs = end.getTime();
+  const nowMs = now.getTime();
+  const durationMs = endMs - startMs;
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || !Number.isFinite(nowMs) || durationMs <= 0 || nowMs < endMs) {
+    return null;
+  }
+
+  const elapsedCompletedWindows = Math.floor((nowMs - endMs) / durationMs);
+  const previousStart = new Date(startMs + elapsedCompletedWindows * durationMs);
+  const previousEnd = new Date(endMs + elapsedCompletedWindows * durationMs);
+  const currentEnd = new Date(previousEnd.getTime() + durationMs);
+  return {
+    previousWindow: {
+      label: knownWindow.label,
+      startAt: previousStart.toISOString(),
+      endAt: previousEnd.toISOString(),
+      startHour: hourString(previousStart),
+      endHour: hourString(previousEnd),
+      ...(elapsedCompletedWindows === 0 && knownWindow.upstreamPercent !== undefined ? { upstreamPercent: knownWindow.upstreamPercent } : {}),
+    },
+    currentWindow: {
+      label: knownWindow.label,
+      startAt: previousEnd.toISOString(),
+      endAt: currentEnd.toISOString(),
+      startHour: hourString(previousEnd),
+      endHour: hourString(currentEnd),
+    },
+  };
+};
+
+const shouldCatchUpMissingState = (binding: Pick<Binding, 'createdAt'>, current: UsageWindow, now = new Date()): boolean => {
+  const bindingCreated = new Date(binding.createdAt).getTime();
+  const currentStart = new Date(current.startAt).getTime();
+  const nowMs = now.getTime();
+  return Number.isFinite(bindingCreated)
+    && Number.isFinite(currentStart)
+    && Number.isFinite(nowMs)
+    && bindingCreated < currentStart
+    && currentStart <= nowMs;
+};
+
+const wasBoundBeforeWindowEnded = (binding: Pick<Binding, 'createdAt'>, window: UsageWindow): boolean => {
+  const bindingCreated = new Date(binding.createdAt).getTime();
+  const windowEnd = new Date(window.endAt).getTime();
+  return Number.isFinite(bindingCreated) && Number.isFinite(windowEnd) && bindingCreated < windowEnd;
+};
+
+const completedWindowBefore = (current: UsageWindow): UsageWindow | null => {
+  const currentStart = new Date(current.startAt);
+  const currentEnd = new Date(current.endAt);
+  const durationMs = currentEnd.getTime() - currentStart.getTime();
+  if (!Number.isFinite(currentStart.getTime()) || !Number.isFinite(currentEnd.getTime()) || durationMs <= 0) return null;
+
+  const previousStart = new Date(currentStart.getTime() - durationMs);
+  return {
+    label: 'Secondary window',
+    startAt: previousStart.toISOString(),
+    endAt: currentStart.toISOString(),
+    startHour: hourString(previousStart),
+    endHour: hourString(currentStart),
+  };
+};
+
 const windowFromState = (state: SecondaryWindowState): UsageWindow => {
   const window: UsageWindow = {
     label: 'Secondary window',
@@ -237,3 +383,16 @@ const windowFromState = (state: SecondaryWindowState): UsageWindow => {
   if (state.usedPercent !== null) window.upstreamPercent = state.usedPercent;
   return window;
 };
+
+const windowState = (
+  binding: Pick<Binding, 'telegramUserId'>,
+  upstreamId: string,
+  window: UsageWindow,
+  usedPercent: number | null,
+): Omit<SecondaryWindowState, 'updatedAt'> => ({
+  telegramUserId: binding.telegramUserId,
+  upstreamId,
+  windowStartAt: window.startAt,
+  resetAfterAt: window.endAt,
+  usedPercent,
+});

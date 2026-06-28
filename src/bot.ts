@@ -26,7 +26,7 @@ import {
 import { FlowayClient, FlowayHttpError } from './floway-client.js';
 import {
   canShareUpstreamQuota,
-  computeWindowsFromQuota,
+  computeWindowsForUpstream,
   summarizeUsageLeaderboard,
   summarizeUsageQuotaEstimate,
   summarizeUsageWindow,
@@ -251,7 +251,7 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
       }
       const upstream = selection.upstream;
 
-      const windows = computeWindowsFromQuota(upstream.codex_quota);
+      const windows = computeWindowsForUpstream(upstream);
       if (windows.length === 0) {
         await replyLong(ctx, formatUsageReports(upstream, []));
         return;
@@ -288,9 +288,9 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
         return;
       }
       const upstream = selection.upstream;
-      const secondaryWindow = computeWindowsFromQuota(upstream.codex_quota)
+      const secondaryWindow = computeWindowsForUpstream(upstream)
         .find(window => window.label === 'Secondary window') ?? null;
-      const secondaryUsedPercent = upstream.codex_quota?.secondary_used_percent;
+      const secondaryUsedPercent = secondaryWindow?.upstreamPercent;
       if (!secondaryWindow || secondaryUsedPercent === undefined) {
         await replyLong(ctx, formatQuotaEstimate(upstream, null));
         return;
@@ -357,7 +357,7 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
       }
 
       const upstream = selection.upstream;
-      const secondaryWindow = computeWindowsFromQuota(upstream.codex_quota)
+      const secondaryWindow = computeWindowsForUpstream(upstream)
         .find(window => window.label === 'Secondary window') ?? null;
       if (!secondaryWindow) {
         await replyLong(ctx, formatQuotaEstimate(upstream, null));
@@ -371,7 +371,7 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
         secondaryWindow,
         exportSnapshot,
       );
-      const secondaryUsedPercent = upstream.codex_quota?.secondary_used_percent;
+      const secondaryUsedPercent = secondaryWindow.upstreamPercent;
       const quotaEstimate = formatSecondaryWindowQuotaEstimate(
         bound.binding.flowayUserId,
         upstream,
@@ -584,7 +584,7 @@ export const selectUpstream = (
 const formatSecondaryWindowQuotaEstimate = (
   flowayUserId: number,
   upstream: UpstreamRecord,
-  secondaryWindow: NonNullable<ReturnType<typeof computeWindowsFromQuota>[number]>,
+  secondaryWindow: NonNullable<ReturnType<typeof computeWindowsForUpstream>[number]>,
   secondaryUsedPercent: number | undefined,
   exportSnapshot: Parameters<typeof summarizeUsageWindow>[3],
   users: Awaited<ReturnType<FlowayClient['listUsers']>>,

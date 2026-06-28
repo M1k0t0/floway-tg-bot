@@ -21,6 +21,9 @@ export default [
         process: 'readonly',
         Response: 'readonly',
         ResponseInit: 'readonly',
+        clearInterval: 'readonly',
+        setInterval: 'readonly',
+        setTimeout: 'readonly',
         URLSearchParams: 'readonly'
       }
     },
@@ -34,6 +37,6 @@ export default [
     }
   },
   {
-    ignores: ['dist/**', 'node_modules/**', 'coverage/**']
+    ignores: ['dist/**', 'node_modules/**', '.pnpm-store/**', 'coverage/**']
   }
 ];

@@ -58,7 +58,7 @@ interface WindowRefresh {
 
 export class SecondaryWindowNotifier {
   private timer: ReturnType<typeof setInterval> | null = null;
-  private running = false;
+  private activePoll: Promise<void> | null = null;
 
   constructor(private readonly options: SecondaryWindowNotifierOptions) {}
 
@@ -70,21 +70,29 @@ export class SecondaryWindowNotifier {
     }, this.options.intervalSeconds * 1000);
   }
 
-  stop(): void {
-    if (!this.timer) return;
-    clearInterval(this.timer);
-    this.timer = null;
+  async stop(): Promise<void> {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+    const activePoll = this.activePoll;
+    if (activePoll) await activePoll;
   }
 
   async pollOnce(): Promise<void> {
-    if (this.running) return;
-    this.running = true;
+    if (this.activePoll) return this.activePoll;
+    const poll = this.runPoll();
+    this.activePoll = poll;
+    await poll;
+  }
+
+  private async runPoll(): Promise<void> {
     try {
       await this.poll();
     } catch (error) {
       console.error('Secondary window notifier failed:', error);
     } finally {
-      this.running = false;
+      this.activePoll = null;
     }
   }
 
@@ -119,6 +127,20 @@ export class SecondaryWindowNotifier {
               currentWindow: elapsed.currentWindow,
               currentState: windowState(bound.binding, upstream.id, elapsed.currentWindow, null),
             });
+          } else if (previous) {
+            const storedWindow = windowFromState(previous);
+            const previousWindow = shouldBackfillCompletedWindow(bound.binding, storedWindow)
+              ? completedWindowBefore(storedWindow)
+              : null;
+            if (previousWindow) {
+              this.enqueueOrApplySentNotification(candidates, {
+                binding: bound.binding,
+                upstream,
+                previousWindow,
+                currentWindow: storedWindow,
+                currentState: windowState(bound.binding, upstream.id, storedWindow, previous.usedPercent),
+              });
+            }
           }
           continue;
         }

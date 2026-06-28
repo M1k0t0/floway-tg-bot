@@ -309,6 +309,74 @@ describe('SecondaryWindowNotifier', () => {
     expect(store.getSecondaryWindowState('12345', 'up_a')?.usedPercent).toBe(42);
   });
 
+  it('backfills the previous window when old code advanced state and Floway quota is missing', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-20T00:00:00.000Z'));
+    const store = createStore();
+    store.upsert({
+      telegramUserId: '12345',
+      flowayUserId: 7,
+      username: 'alice',
+      flowaySession: 'session-alice',
+    });
+    vi.setSystemTime(new Date('2026-06-23T00:00:00.000Z'));
+    store.upsertSecondaryWindowState({
+      telegramUserId: '12345',
+      upstreamId: 'up_a',
+      windowStartAt: '2026-06-22T00:00:00.000Z',
+      resetAfterAt: '2026-06-29T00:00:00.000Z',
+      usedPercent: 18,
+    });
+
+    const currentUpstream = { ...upstreamWithSecondaryReset('2026-06-29T00:00:00.000Z', 18), codex_quota: null };
+    let exportCalls = 0;
+    const messages: Array<{ chatId: string; text: string }> = [];
+    const snapshot: SanitizedExportSnapshot = {
+      exportedAt: '2026-06-23T00:05:00.000Z',
+      users: [{ id: 7, username: 'alice', deletedAt: null }],
+      apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null }],
+      usage: [
+        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-21T12', requests: 4, tokens: { input: 200 }, cost: { input: 1 } },
+      ],
+    };
+    const floway = {
+      listUpstreams: async () => [currentUpstream],
+      listUsers: async () => [
+        { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
+      ],
+      getMe: async () => ({
+        user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
+        viaApiKey: false,
+        apiKey: null,
+      }),
+      exportUsageSnapshot: async () => {
+        exportCalls += 1;
+        return snapshot;
+      },
+    };
+    const bot = {
+      telegram: {
+        sendMessage: async (chatId: string, text: string) => {
+          messages.push({ chatId, text });
+          return {};
+        },
+      },
+    };
+    const notifier = new SecondaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+
+    await notifier.pollOnce();
+    await notifier.pollOnce();
+
+    expect(exportCalls).toBe(1);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-15T00:00:00.000Z</code> -> <code>2026-06-22T00:00:00.000Z</code>');
+    expect(messages[0]!.text).toContain('<b>Your upstream tokens</b>: <b>200</b>');
+    expect(messages[0]!.text).toContain('Secondary quota estimate unavailable.');
+    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-15T00:00:00.000Z', '2026-06-22T00:00:00.000Z')).not.toBeNull();
+    expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
+    expect(store.getSecondaryWindowState('12345', 'up_a')?.usedPercent).toBe(18);
+  });
+
   it('refreshes current window state after a backfill notification was already recorded', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-20T00:00:00.000Z'));
@@ -628,6 +696,45 @@ describe('SecondaryWindowNotifier', () => {
 
     expect(sendAttempts).toBe(2);
     expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
+  });
+
+  it('waits for the active poll before stop resolves', async () => {
+    const store = createStore();
+    let resolveUpstreams!: (upstreams: UpstreamRecord[]) => void;
+    const upstreams = new Promise<UpstreamRecord[]>(resolve => {
+      resolveUpstreams = resolve;
+    });
+    let listStarted = false;
+    const floway = {
+      listUpstreams: async () => {
+        listStarted = true;
+        return upstreams;
+      },
+      listUsers: async () => [],
+      getMe: async () => {
+        throw new Error('binding refresh should not run without bindings');
+      },
+      exportUsageSnapshot: async () => emptySnapshot(),
+    };
+    const bot = {
+      telegram: {
+        sendMessage: async () => ({}),
+      },
+    };
+    const notifier = new SecondaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+
+    notifier.start();
+    expect(listStarted).toBe(true);
+
+    const stopPromise = notifier.stop();
+    const earlyResult = await Promise.race([
+      stopPromise.then(() => 'stopped' as const),
+      Promise.resolve('pending' as const),
+    ]);
+    expect(earlyResult).toBe('pending');
+
+    resolveUpstreams([]);
+    await stopPromise;
   });
 });
 

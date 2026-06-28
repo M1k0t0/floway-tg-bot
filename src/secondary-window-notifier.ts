@@ -200,7 +200,7 @@ export class SecondaryWindowNotifier {
               ? completedWindowBefore(storedWindow)
               : null;
             if (previousWindow) {
-              const storedWindowMatchesCurrent = isSameWindow(storedWindow, currentWindow);
+              const storedWindowMatchesCurrent = isSameWindowPeriod(storedWindow, currentWindow);
               this.enqueueOrApplySentNotification(candidates, {
                 binding: bound.binding,
                 upstream,
@@ -366,6 +366,7 @@ const formatPreviousQuotaEstimate = (
 };
 
 const didWindowRefresh = (previous: SecondaryWindowState, current: UsageWindow): boolean => {
+  if (isSameWindowPeriod(windowFromState(previous), current)) return false;
   const previousEnd = new Date(previous.resetAfterAt).getTime();
   const currentEnd = new Date(current.endAt).getTime();
   return Number.isFinite(previousEnd) && Number.isFinite(currentEnd) && currentEnd > previousEnd;
@@ -377,8 +378,8 @@ const isWindowAtLeast = (previous: SecondaryWindowState, current: UsageWindow): 
   return Number.isFinite(previousEnd) && Number.isFinite(currentEnd) && currentEnd >= previousEnd;
 };
 
-const isSameWindow = (left: UsageWindow, right: UsageWindow): boolean =>
-  left.startAt === right.startAt && left.endAt === right.endAt;
+const isSameWindowPeriod = (left: UsageWindow, right: UsageWindow): boolean =>
+  left.startHour === right.startHour && left.endHour === right.endHour;
 
 const isWindowFromFuture = (window: UsageWindow, now: Date): boolean => {
   const startAt = new Date(window.startAt).getTime();
@@ -396,15 +397,17 @@ const wasNotificationSentAfterWindowEnded = (
 };
 
 const windowToReport = (previous: SecondaryWindowState, current: UsageWindow): UsageWindow => {
+  const previousWindow = windowFromState(previous);
   const completed = completedWindowBefore(current);
-  if (!completed) return windowFromState(previous);
+  if (!completed) return previousWindow;
+  if (isSameWindowPeriod(previousWindow, completed)) return previousWindow;
 
   const previousEnd = new Date(previous.resetAfterAt).getTime();
   const completedEnd = new Date(completed.endAt).getTime();
   if (Number.isFinite(previousEnd) && Number.isFinite(completedEnd) && completedEnd > previousEnd) {
     return completed;
   }
-  return windowFromState(previous);
+  return previousWindow;
 };
 
 const elapsedWindowRefreshFromState = (previous: SecondaryWindowState, now = new Date()): WindowRefresh | null =>

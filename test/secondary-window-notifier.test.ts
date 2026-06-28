@@ -492,6 +492,64 @@ describe('SecondaryWindowNotifier', () => {
     expect(store.getSecondaryWindowState('12345', 'up_a')?.usedPercent).toBe(3);
   });
 
+  it('does not treat same-window reset timestamp drift as a refresh', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-21T00:00:00.000Z'));
+    const store = createStore();
+    store.upsert({
+      telegramUserId: '12345',
+      flowayUserId: 7,
+      username: 'alice',
+      flowaySession: 'session-alice',
+    });
+    vi.setSystemTime(new Date('2026-06-28T10:25:00.000Z'));
+    store.upsertSecondaryWindowState({
+      telegramUserId: '12345',
+      upstreamId: 'up_a',
+      windowStartAt: '2026-06-28T00:51:17.124Z',
+      resetAfterAt: '2026-07-05T00:51:17.124Z',
+      usedPercent: 3,
+    });
+    store.upsertSecondaryWindowNotification({
+      telegramUserId: '12345',
+      upstreamId: 'up_a',
+      windowStartAt: '2026-06-21T00:51:16.847Z',
+      resetAfterAt: '2026-06-28T00:51:16.847Z',
+    });
+
+    const messages: Array<{ chatId: string; text: string }> = [];
+    const floway = {
+      listUpstreams: async () => [upstreamWithSecondaryReset('2026-07-05T00:51:18.025Z', 3)],
+      listUsers: async () => {
+        throw new Error('users should not be listed without notification candidates');
+      },
+      getMe: async () => ({
+        user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
+        viaApiKey: false,
+        apiKey: null,
+      }),
+      exportUsageSnapshot: async () => {
+        throw new Error('usage export should not be called for timestamp drift');
+      },
+    };
+    const bot = {
+      telegram: {
+        sendMessage: async (chatId: string, text: string) => {
+          messages.push({ chatId, text });
+          return {};
+        },
+      },
+    };
+    const notifier = new SecondaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+
+    await notifier.pollOnce();
+
+    expect(messages).toEqual([]);
+    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-28T00:51:18.025Z', '2026-07-05T00:51:18.025Z')).toBeNull();
+    expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-07-05T00:51:18.025Z');
+    expect(store.getSecondaryWindowState('12345', 'up_a')?.usedPercent).toBe(3);
+  });
+
   it('does not let a premature notification ledger suppress the real reset notification', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-21T00:00:00.000Z'));

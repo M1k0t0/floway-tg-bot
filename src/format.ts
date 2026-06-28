@@ -265,7 +265,7 @@ export const formatUsageReports = (upstream: UpstreamRecord, reports: readonly U
       label('Your share by requests', bold(formatPercent(report.userRequestSharePercent))),
       label('Your upstream tokens', `${bold(formatNumber(tokenTotal(report.user.tokens)))} (${formatTokenUsage(report.user.tokens)})`),
       label('All upstream tokens', `${bold(formatNumber(tokenTotal(report.upstream.tokens)))} (${formatTokenUsage(report.upstream.tokens)})`),
-      label('Requests', `${formatNumber(report.user.requests)} / ${formatNumber(report.upstream.requests)}`),
+      label('Requests', `${bold(formatNumber(report.user.requests))} / ${formatNumber(report.upstream.requests)}`),
       label('Your upstream cost', bold(formatMoney(report.user.cost))),
       label('All upstream cost', formatMoney(report.upstream.cost)),
     );
@@ -284,7 +284,7 @@ export const formatSecondaryWindowNotification = (
   label('Previous window', `${code(report.window.startAt)} -> ${code(report.window.endAt)}`),
   label('Your upstream tokens', `${bold(formatNumber(tokenTotal(report.user.tokens)))} (${formatTokenUsage(report.user.tokens)})`),
   label('All upstream tokens', `${bold(formatNumber(tokenTotal(report.upstream.tokens)))} (${formatTokenUsage(report.upstream.tokens)})`),
-  label('Requests', `${formatNumber(report.user.requests)} / ${formatNumber(report.upstream.requests)}`),
+  label('Requests', `${bold(formatNumber(report.user.requests))} / ${formatNumber(report.upstream.requests)}`),
   label('Upstream cost', `${bold(formatMoney(report.user.cost))} / ${formatMoney(report.upstream.cost)}`),
   '',
   quotaEstimate,

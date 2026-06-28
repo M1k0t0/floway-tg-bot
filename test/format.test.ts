@@ -299,6 +299,7 @@ describe('formatters', () => {
     expect(text).toContain('<b>Secondary window refreshed</b>');
     expect(text).toContain('<b>Codex &lt;main&gt;&amp;</b> <code>up_a</code>');
     expect(text).toContain('<b>Your upstream tokens</b>: <b>100</b>');
+    expect(text).toContain('<b>Requests</b>: <b>1</b> / 4');
     expect(text).toContain('<b>Upstream cost</b>: <b>$0.000100</b> / $0.000400');
     expect(text).toContain('\n\n<b>Quota estimate</b>');
   });

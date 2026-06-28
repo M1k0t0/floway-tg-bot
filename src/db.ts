@@ -24,6 +24,14 @@ interface SecondaryWindowStateRow {
   updated_at: string;
 }
 
+interface SecondaryWindowNotificationRow {
+  telegram_user_id: string;
+  upstream_id: string;
+  window_start_at: string;
+  reset_after_at: string;
+  sent_at: string;
+}
+
 export interface SecondaryWindowState {
   telegramUserId: string;
   upstreamId: string;
@@ -31,6 +39,14 @@ export interface SecondaryWindowState {
   resetAfterAt: string;
   usedPercent: number | null;
   updatedAt: string;
+}
+
+export interface SecondaryWindowNotification {
+  telegramUserId: string;
+  upstreamId: string;
+  windowStartAt: string;
+  resetAfterAt: string;
+  sentAt: string;
 }
 
 export class BindingStore {
@@ -62,6 +78,16 @@ export class BindingStore {
         used_percent REAL,
         updated_at TEXT NOT NULL,
         PRIMARY KEY (telegram_user_id, upstream_id)
+      )
+    `);
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS secondary_window_notification (
+        telegram_user_id TEXT NOT NULL,
+        upstream_id TEXT NOT NULL,
+        window_start_at TEXT NOT NULL,
+        reset_after_at TEXT NOT NULL,
+        sent_at TEXT NOT NULL,
+        PRIMARY KEY (telegram_user_id, upstream_id, window_start_at, reset_after_at)
       )
     `);
   }
@@ -111,6 +137,7 @@ export class BindingStore {
   }
 
   delete(telegramUserId: string): boolean {
+    this.db.prepare('DELETE FROM secondary_window_notification WHERE telegram_user_id = ?').run(telegramUserId);
     this.db.prepare('DELETE FROM secondary_window_state WHERE telegram_user_id = ?').run(telegramUserId);
     const result = this.db.prepare('DELETE FROM bindings WHERE telegram_user_id = ?').run(telegramUserId);
     return result.changes > 0;
@@ -156,6 +183,35 @@ export class BindingStore {
       .run(telegramUserId, ...upstreamIds);
   }
 
+  getSecondaryWindowNotification(
+    telegramUserId: string,
+    upstreamId: string,
+    windowStartAt: string,
+    resetAfterAt: string,
+  ): SecondaryWindowNotification | null {
+    const row = this.db
+      .prepare(`
+        SELECT telegram_user_id, upstream_id, window_start_at, reset_after_at, sent_at
+        FROM secondary_window_notification
+        WHERE telegram_user_id = ? AND upstream_id = ? AND window_start_at = ? AND reset_after_at = ?
+      `)
+      .get(telegramUserId, upstreamId, windowStartAt, resetAfterAt) as SecondaryWindowNotificationRow | undefined;
+    return row ? secondaryWindowNotificationFromRow(row) : null;
+  }
+
+  upsertSecondaryWindowNotification(input: Omit<SecondaryWindowNotification, 'sentAt'>): SecondaryWindowNotification {
+    const sentAt = new Date().toISOString();
+    this.db
+      .prepare(`
+        INSERT INTO secondary_window_notification (telegram_user_id, upstream_id, window_start_at, reset_after_at, sent_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT (telegram_user_id, upstream_id, window_start_at, reset_after_at) DO UPDATE SET
+          sent_at = excluded.sent_at
+      `)
+      .run(input.telegramUserId, input.upstreamId, input.windowStartAt, input.resetAfterAt, sentAt);
+    return { ...input, sentAt };
+  }
+
   close(): void {
     this.db.close();
   }
@@ -179,4 +235,12 @@ const secondaryWindowStateFromRow = (row: SecondaryWindowStateRow): SecondaryWin
   resetAfterAt: row.reset_after_at,
   usedPercent: row.used_percent,
   updatedAt: row.updated_at,
+});
+
+const secondaryWindowNotificationFromRow = (row: SecondaryWindowNotificationRow): SecondaryWindowNotification => ({
+  telegramUserId: row.telegram_user_id,
+  upstreamId: row.upstream_id,
+  windowStartAt: row.window_start_at,
+  resetAfterAt: row.reset_after_at,
+  sentAt: row.sent_at,
 });

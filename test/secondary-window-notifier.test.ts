@@ -239,6 +239,183 @@ describe('SecondaryWindowNotifier', () => {
     expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
   });
 
+  it('backfills the previous window when old code already advanced state without recording a notification', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-20T00:00:00.000Z'));
+    const store = createStore();
+    store.upsert({
+      telegramUserId: '12345',
+      flowayUserId: 7,
+      username: 'alice',
+      flowaySession: 'session-alice',
+    });
+    vi.setSystemTime(new Date('2026-06-23T00:00:00.000Z'));
+    store.upsertSecondaryWindowState({
+      telegramUserId: '12345',
+      upstreamId: 'up_a',
+      windowStartAt: '2026-06-22T00:00:00.000Z',
+      resetAfterAt: '2026-06-29T00:00:00.000Z',
+      usedPercent: 18,
+    });
+
+    const currentUpstream = upstreamWithSecondaryReset('2026-06-29T00:00:00.000Z', 42);
+    let exportCalls = 0;
+    const messages: Array<{ chatId: string; text: string }> = [];
+    const snapshot: SanitizedExportSnapshot = {
+      exportedAt: '2026-06-23T00:05:00.000Z',
+      users: [{ id: 7, username: 'alice', deletedAt: null }],
+      apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null }],
+      usage: [
+        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-21T12', requests: 4, tokens: { input: 200 }, cost: { input: 1 } },
+      ],
+    };
+    const floway = {
+      listUpstreams: async () => [currentUpstream],
+      listUsers: async () => [
+        { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
+      ],
+      getMe: async () => ({
+        user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
+        viaApiKey: false,
+        apiKey: null,
+      }),
+      exportUsageSnapshot: async () => {
+        exportCalls += 1;
+        return snapshot;
+      },
+    };
+    const bot = {
+      telegram: {
+        sendMessage: async (chatId: string, text: string) => {
+          messages.push({ chatId, text });
+          return {};
+        },
+      },
+    };
+    const notifier = new SecondaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+
+    await notifier.pollOnce();
+    await notifier.pollOnce();
+
+    expect(exportCalls).toBe(1);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-15T00:00:00.000Z</code> -> <code>2026-06-22T00:00:00.000Z</code>');
+    expect(messages[0]!.text).toContain('<b>Your upstream tokens</b>: <b>200</b>');
+    expect(messages[0]!.text).toContain('Secondary quota estimate unavailable.');
+    expect(messages[0]!.text).not.toContain('<b>18.0%</b>');
+    expect(messages[0]!.text).not.toContain('<b>42.0%</b>');
+    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-15T00:00:00.000Z', '2026-06-22T00:00:00.000Z')).not.toBeNull();
+    expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
+    expect(store.getSecondaryWindowState('12345', 'up_a')?.usedPercent).toBe(42);
+  });
+
+  it('refreshes current window state after a backfill notification was already recorded', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-20T00:00:00.000Z'));
+    const store = createStore();
+    store.upsert({
+      telegramUserId: '12345',
+      flowayUserId: 7,
+      username: 'alice',
+      flowaySession: 'session-alice',
+    });
+    vi.setSystemTime(new Date('2026-06-23T00:00:00.000Z'));
+    store.upsertSecondaryWindowState({
+      telegramUserId: '12345',
+      upstreamId: 'up_a',
+      windowStartAt: '2026-06-22T00:00:00.000Z',
+      resetAfterAt: '2026-06-29T00:00:00.000Z',
+      usedPercent: 18,
+    });
+    store.upsertSecondaryWindowNotification({
+      telegramUserId: '12345',
+      upstreamId: 'up_a',
+      windowStartAt: '2026-06-15T00:00:00.000Z',
+      resetAfterAt: '2026-06-22T00:00:00.000Z',
+    });
+
+    const messages: Array<{ chatId: string; text: string }> = [];
+    const floway = {
+      listUpstreams: async () => [upstreamWithSecondaryReset('2026-06-29T00:00:00.000Z', 42)],
+      listUsers: async () => {
+        throw new Error('users should not be listed without notification candidates');
+      },
+      getMe: async () => ({
+        user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
+        viaApiKey: false,
+        apiKey: null,
+      }),
+      exportUsageSnapshot: async () => {
+        throw new Error('usage export should not be called for an already-sent notification');
+      },
+    };
+    const bot = {
+      telegram: {
+        sendMessage: async (chatId: string, text: string) => {
+          messages.push({ chatId, text });
+          return {};
+        },
+      },
+    };
+    const notifier = new SecondaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+
+    await notifier.pollOnce();
+
+    expect(messages).toEqual([]);
+    expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
+    expect(store.getSecondaryWindowState('12345', 'up_a')?.usedPercent).toBe(42);
+  });
+
+  it('does not backfill a previous window that ended before the binding existed', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-23T00:00:00.000Z'));
+    const store = createStore();
+    store.upsert({
+      telegramUserId: '12345',
+      flowayUserId: 7,
+      username: 'alice',
+      flowaySession: 'session-alice',
+    });
+    store.upsertSecondaryWindowState({
+      telegramUserId: '12345',
+      upstreamId: 'up_a',
+      windowStartAt: '2026-06-22T00:00:00.000Z',
+      resetAfterAt: '2026-06-29T00:00:00.000Z',
+      usedPercent: 18,
+    });
+
+    const messages: Array<{ chatId: string; text: string }> = [];
+    const floway = {
+      listUpstreams: async () => [upstreamWithSecondaryReset('2026-06-29T00:00:00.000Z', 18)],
+      listUsers: async () => [
+        { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'], createdAt: '2026-06-23T00:00:00.000Z' },
+      ],
+      getMe: async () => ({
+        user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
+        viaApiKey: false,
+        apiKey: null,
+      }),
+      exportUsageSnapshot: async () => {
+        throw new Error('usage export should not be called without notification candidates');
+      },
+    };
+    const bot = {
+      telegram: {
+        sendMessage: async (chatId: string, text: string) => {
+          messages.push({ chatId, text });
+          return {};
+        },
+      },
+    };
+    const notifier = new SecondaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+
+    await notifier.pollOnce();
+
+    expect(messages).toEqual([]);
+    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-15T00:00:00.000Z', '2026-06-22T00:00:00.000Z')).toBeNull();
+    expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
+  });
+
   it('uses local state to notify when Floway quota is stale after the reset time', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-21T00:00:00.000Z'));

@@ -550,6 +550,77 @@ describe('SecondaryWindowNotifier', () => {
     expect(store.getSecondaryWindowState('12345', 'up_a')?.usedPercent).toBe(3);
   });
 
+  it('reports a manually refreshed overlapping window using the new window start as the previous end', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-21T00:00:00.000Z'));
+    const store = createStore();
+    store.upsert({
+      telegramUserId: '12345',
+      flowayUserId: 7,
+      username: 'alice',
+      flowaySession: 'session-alice',
+    });
+    vi.setSystemTime(new Date('2026-06-30T10:25:00.000Z'));
+    store.upsertSecondaryWindowState({
+      telegramUserId: '12345',
+      upstreamId: 'up_a',
+      windowStartAt: '2026-06-28T00:51:18.169Z',
+      resetAfterAt: '2026-07-05T00:51:18.169Z',
+      usedPercent: 5,
+    });
+    store.upsertSecondaryWindowNotification({
+      telegramUserId: '12345',
+      upstreamId: 'up_a',
+      windowStartAt: '2026-06-21T00:51:18.025Z',
+      resetAfterAt: '2026-06-28T00:51:18.025Z',
+    });
+
+    const messages: Array<{ chatId: string; text: string }> = [];
+    const snapshot: SanitizedExportSnapshot = {
+      exportedAt: '2026-06-30T10:25:00.000Z',
+      users: [{ id: 7, username: 'alice', deletedAt: null }],
+      apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null }],
+      usage: [
+        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-28T12', requests: 1, tokens: { input: 100 }, cost: { input: 1 } },
+        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-29T12', requests: 1, tokens: { input: 999 }, cost: { input: 1 } },
+      ],
+    };
+    const floway = {
+      listUpstreams: async () => [upstreamWithSecondaryReset('2026-07-06T11:01:31.799Z', 6)],
+      listUsers: async () => [
+        { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
+      ],
+      getMe: async () => ({
+        user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
+        viaApiKey: false,
+        apiKey: null,
+      }),
+      exportUsageSnapshot: async () => snapshot,
+    };
+    const bot = {
+      telegram: {
+        sendMessage: async (chatId: string, text: string) => {
+          messages.push({ chatId, text });
+          return {};
+        },
+      },
+    };
+    const notifier = new SecondaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+
+    await notifier.pollOnce();
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-28T00:51:18.169Z</code> -> <code>2026-06-29T11:01:31.799Z</code>');
+    expect(messages[0]!.text).toContain('<b>Window note</b>: Upstream refreshed this secondary window early; this is not a natural cycle.');
+    expect(messages[0]!.text).toContain('<b>Your upstream tokens</b>: <b>100</b>');
+    expect(messages[0]!.text).not.toContain('999');
+    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-22T11:01:31.799Z', '2026-06-29T11:01:31.799Z')).toBeNull();
+    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-28T00:51:18.169Z', '2026-06-29T11:01:31.799Z')).not.toBeNull();
+    expect(store.getSecondaryWindowState('12345', 'up_a')?.windowStartAt).toBe('2026-06-29T11:01:31.799Z');
+    expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-07-06T11:01:31.799Z');
+    expect(store.getSecondaryWindowState('12345', 'up_a')?.usedPercent).toBe(6);
+  });
+
   it('does not let a premature notification ledger suppress the real reset notification', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-21T00:00:00.000Z'));
@@ -610,9 +681,9 @@ describe('SecondaryWindowNotifier', () => {
     await notifier.pollOnce();
 
     expect(messages).toHaveLength(1);
-    expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-28T00:51:17.124Z</code> -> <code>2026-07-05T00:51:17.124Z</code>');
+    expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-28T00:51:17.124Z</code> -> <code>2026-07-05T00:51:16.847Z</code>');
     expect(messages[0]!.text).toContain('<b>Your upstream tokens</b>: <b>100</b>');
-    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-28T00:51:17.124Z', '2026-07-05T00:51:17.124Z')?.sentAt)
+    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-28T00:51:17.124Z', '2026-07-05T00:51:16.847Z')?.sentAt)
       .toBe('2026-07-05T00:52:00.000Z');
     expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-07-12T00:51:16.847Z');
   });

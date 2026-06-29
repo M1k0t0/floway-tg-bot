@@ -49,6 +49,7 @@ interface NotificationCandidate {
   previousWindow: UsageWindow;
   currentWindow: UsageWindow;
   currentState: Omit<SecondaryWindowState, 'updatedAt'>;
+  note?: string;
 }
 
 interface WindowRefresh {
@@ -174,6 +175,18 @@ export class SecondaryWindowNotifier {
         }
 
         const currentState = windowState(bound.binding, upstream.id, currentWindow, currentWindow.upstreamPercent ?? null);
+
+        if (previous && isManualWindowRefresh(previous, currentWindow)) {
+          this.enqueueOrApplySentNotification(candidates, {
+            binding: bound.binding,
+            upstream,
+            previousWindow: manualRefreshWindowToReport(previous, currentWindow),
+            currentWindow,
+            currentState,
+            note: 'Upstream refreshed this secondary window early; this is not a natural cycle.',
+          });
+          continue;
+        }
 
         if (previous && didWindowRefresh(previous, currentWindow)) {
           const previousWindow = windowToReport(previous, currentWindow);
@@ -305,7 +318,7 @@ export class SecondaryWindowNotifier {
       snapshot,
     );
     const quotaEstimate = formatPreviousQuotaEstimate(candidate, snapshot, users);
-    const text = formatSecondaryWindowNotification(candidate.upstream, report, quotaEstimate);
+    const text = formatSecondaryWindowNotification(candidate.upstream, report, quotaEstimate, candidate.note);
     for (const chunk of splitMessage(text)) {
       await this.options.bot.telegram.sendMessage(candidate.binding.telegramUserId, chunk, { parse_mode: 'HTML' });
     }
@@ -378,6 +391,22 @@ const isWindowAtLeast = (previous: SecondaryWindowState, current: UsageWindow): 
   return Number.isFinite(previousEnd) && Number.isFinite(currentEnd) && currentEnd >= previousEnd;
 };
 
+const isManualWindowRefresh = (previous: SecondaryWindowState, current: UsageWindow): boolean => {
+  const stored = windowFromState(previous);
+  if (isSameWindowPeriod(stored, current)) return false;
+  const previousStart = new Date(previous.windowStartAt).getTime();
+  const previousEnd = new Date(previous.resetAfterAt).getTime();
+  const currentStart = new Date(current.startAt).getTime();
+  const currentEnd = new Date(current.endAt).getTime();
+  return Number.isFinite(previousStart)
+    && Number.isFinite(previousEnd)
+    && Number.isFinite(currentStart)
+    && Number.isFinite(currentEnd)
+    && currentStart > previousStart
+    && currentStart < previousEnd
+    && currentEnd > previousEnd;
+};
+
 const isSameWindowPeriod = (left: UsageWindow, right: UsageWindow): boolean =>
   left.startHour === right.startHour && left.endHour === right.endHour;
 
@@ -408,6 +437,15 @@ const windowToReport = (previous: SecondaryWindowState, current: UsageWindow): U
     return completed;
   }
   return previousWindow;
+};
+
+const manualRefreshWindowToReport = (previous: SecondaryWindowState, current: UsageWindow): UsageWindow => {
+  const window = windowFromState(previous);
+  return {
+    ...window,
+    endAt: current.startAt,
+    endHour: current.startHour,
+  };
 };
 
 const elapsedWindowRefreshFromState = (previous: SecondaryWindowState, now = new Date()): WindowRefresh | null =>

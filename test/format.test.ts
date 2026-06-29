@@ -302,5 +302,9 @@ describe('formatters', () => {
     expect(text).toContain('<b>Requests</b>: <b>1</b> / 4');
     expect(text).toContain('<b>Upstream cost</b>: <b>$0.000100</b> / $0.000400');
     expect(text).toContain('\n\n<b>Quota estimate</b>');
+    expect(text).not.toContain('<b>Window note</b>');
+
+    const noted = formatSecondaryWindowNotification(upstream, report, '<b>Quota estimate</b>', 'Manual <refresh>&');
+    expect(noted).toContain('<b>Window note</b>: Manual &lt;refresh&gt;&amp;');
   });
 });

@@ -277,18 +277,25 @@ export const formatSecondaryWindowNotification = (
   upstream: UpstreamRecord,
   report: UsageWindowReport,
   quotaEstimate: string,
-): string => [
-  blockTitle('Secondary window refreshed'),
-  `${bold(upstream.name)} ${code(upstream.id)}`,
-  '',
-  label('Previous window', `${code(report.window.startAt)} -> ${code(report.window.endAt)}`),
-  label('Your upstream tokens', `${bold(formatNumber(tokenTotal(report.user.tokens)))} (${formatTokenUsage(report.user.tokens)})`),
-  label('All upstream tokens', `${bold(formatNumber(tokenTotal(report.upstream.tokens)))} (${formatTokenUsage(report.upstream.tokens)})`),
-  label('Requests', `${bold(formatNumber(report.user.requests))} / ${formatNumber(report.upstream.requests)}`),
-  label('Upstream cost', `${bold(formatMoney(report.user.cost))} / ${formatMoney(report.upstream.cost)}`),
-  '',
-  quotaEstimate,
-].join('\n');
+  note?: string,
+): string => {
+  const lines = [
+    blockTitle('Secondary window refreshed'),
+    `${bold(upstream.name)} ${code(upstream.id)}`,
+    '',
+    label('Previous window', `${code(report.window.startAt)} -> ${code(report.window.endAt)}`),
+  ];
+  if (note) lines.push(label('Window note', html(note)));
+  lines.push(
+    label('Your upstream tokens', `${bold(formatNumber(tokenTotal(report.user.tokens)))} (${formatTokenUsage(report.user.tokens)})`),
+    label('All upstream tokens', `${bold(formatNumber(tokenTotal(report.upstream.tokens)))} (${formatTokenUsage(report.upstream.tokens)})`),
+    label('Requests', `${bold(formatNumber(report.user.requests))} / ${formatNumber(report.upstream.requests)}`),
+    label('Upstream cost', `${bold(formatMoney(report.user.cost))} / ${formatMoney(report.upstream.cost)}`),
+    '',
+    quotaEstimate,
+  );
+  return lines.join('\n');
+};
 
 export const formatQuotaEstimate = (upstream: UpstreamRecord, report: UsageQuotaEstimate | null): string => {
   if (!report) {

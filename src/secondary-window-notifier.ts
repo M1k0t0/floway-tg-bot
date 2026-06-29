@@ -379,50 +379,38 @@ const formatPreviousQuotaEstimate = (
 };
 
 const didWindowRefresh = (previous: SecondaryWindowState, current: UsageWindow): boolean => {
-  if (isSameWindowPeriod(windowFromState(previous), current)) return false;
-  const previousEnd = new Date(previous.resetAfterAt).getTime();
-  const currentEnd = new Date(current.endAt).getTime();
-  return Number.isFinite(previousEnd) && Number.isFinite(currentEnd) && currentEnd > previousEnd;
+  const stored = windowFromState(previous);
+  if (isSameWindowPeriod(stored, current)) return false;
+  return isHourAfter(current.endHour, stored.endHour);
 };
 
 const isWindowAtLeast = (previous: SecondaryWindowState, current: UsageWindow): boolean => {
-  const previousEnd = new Date(previous.resetAfterAt).getTime();
-  const currentEnd = new Date(current.endAt).getTime();
-  return Number.isFinite(previousEnd) && Number.isFinite(currentEnd) && currentEnd >= previousEnd;
+  const stored = windowFromState(previous);
+  return isHourAtOrAfter(current.endHour, stored.endHour);
 };
 
 const isManualWindowRefresh = (previous: SecondaryWindowState, current: UsageWindow): boolean => {
   const stored = windowFromState(previous);
   if (isSameWindowPeriod(stored, current)) return false;
-  const previousStart = new Date(previous.windowStartAt).getTime();
-  const previousEnd = new Date(previous.resetAfterAt).getTime();
-  const currentStart = new Date(current.startAt).getTime();
-  const currentEnd = new Date(current.endAt).getTime();
-  return Number.isFinite(previousStart)
-    && Number.isFinite(previousEnd)
-    && Number.isFinite(currentStart)
-    && Number.isFinite(currentEnd)
-    && currentStart > previousStart
-    && currentStart < previousEnd
-    && currentEnd > previousEnd;
+  return isHourAfter(current.startHour, stored.startHour)
+    && isHourBefore(current.startHour, stored.endHour)
+    && isHourAfter(current.endHour, stored.endHour);
 };
 
 const isSameWindowPeriod = (left: UsageWindow, right: UsageWindow): boolean =>
   left.startHour === right.startHour && left.endHour === right.endHour;
 
 const isWindowFromFuture = (window: UsageWindow, now: Date): boolean => {
-  const startAt = new Date(window.startAt).getTime();
-  const nowMs = now.getTime();
-  return Number.isFinite(startAt) && Number.isFinite(nowMs) && startAt > nowMs;
+  const nowHour = hourStringOrNull(now);
+  return nowHour !== null && isHourAfter(window.startHour, nowHour);
 };
 
 const wasNotificationSentAfterWindowEnded = (
   notification: Pick<SecondaryWindowNotification, 'sentAt'>,
   window: UsageWindow,
 ): boolean => {
-  const sentAt = new Date(notification.sentAt).getTime();
-  const endAt = new Date(window.endAt).getTime();
-  return Number.isFinite(sentAt) && Number.isFinite(endAt) && sentAt >= endAt;
+  const sentHour = hourStringOrNull(new Date(notification.sentAt));
+  return sentHour !== null && isHourAtOrAfter(sentHour, window.endHour);
 };
 
 const windowToReport = (previous: SecondaryWindowState, current: UsageWindow): UsageWindow => {
@@ -431,9 +419,7 @@ const windowToReport = (previous: SecondaryWindowState, current: UsageWindow): U
   if (!completed) return previousWindow;
   if (isSameWindowPeriod(previousWindow, completed)) return previousWindow;
 
-  const previousEnd = new Date(previous.resetAfterAt).getTime();
-  const completedEnd = new Date(completed.endAt).getTime();
-  if (Number.isFinite(previousEnd) && Number.isFinite(completedEnd) && completedEnd > previousEnd) {
+  if (isHourAfter(completed.endHour, previousWindow.endHour)) {
     return completed;
   }
   return previousWindow;
@@ -457,12 +443,20 @@ const elapsedWindowRefresh = (knownWindow: UsageWindow, now: Date): WindowRefres
   const startMs = start.getTime();
   const endMs = end.getTime();
   const nowMs = now.getTime();
+  const nowHour = hourStringOrNull(now);
   const durationMs = endMs - startMs;
-  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || !Number.isFinite(nowMs) || durationMs <= 0 || nowMs < endMs) {
+  if (
+    !Number.isFinite(startMs)
+    || !Number.isFinite(endMs)
+    || !Number.isFinite(nowMs)
+    || nowHour === null
+    || durationMs <= 0
+    || isHourBefore(nowHour, knownWindow.endHour)
+  ) {
     return null;
   }
 
-  const elapsedCompletedWindows = Math.floor((nowMs - endMs) / durationMs);
+  const elapsedCompletedWindows = Math.max(0, Math.floor((nowMs - endMs) / durationMs));
   const previousStart = new Date(startMs + elapsedCompletedWindows * durationMs);
   const previousEnd = new Date(endMs + elapsedCompletedWindows * durationMs);
   const currentEnd = new Date(previousEnd.getTime() + durationMs);
@@ -486,29 +480,36 @@ const elapsedWindowRefresh = (knownWindow: UsageWindow, now: Date): WindowRefres
 };
 
 const shouldBackfillCompletedWindow = (binding: Pick<Binding, 'createdAt'>, currentWindow: UsageWindow, now = new Date()): boolean => {
-  const currentStart = new Date(currentWindow.startAt).getTime();
-  const nowMs = now.getTime();
-  if (!Number.isFinite(currentStart) || !Number.isFinite(nowMs) || currentStart > nowMs) return false;
+  const nowHour = hourStringOrNull(now);
+  if (nowHour === null || isHourAfter(currentWindow.startHour, nowHour)) return false;
   const previousWindow = completedWindowBefore(currentWindow);
   return previousWindow !== null && wasBoundBeforeWindowEnded(binding, previousWindow);
 };
 
 const shouldCatchUpMissingState = (binding: Pick<Binding, 'createdAt'>, current: UsageWindow, now = new Date()): boolean => {
-  const bindingCreated = new Date(binding.createdAt).getTime();
-  const currentStart = new Date(current.startAt).getTime();
-  const nowMs = now.getTime();
-  return Number.isFinite(bindingCreated)
-    && Number.isFinite(currentStart)
-    && Number.isFinite(nowMs)
-    && bindingCreated < currentStart
-    && currentStart <= nowMs;
+  const bindingCreatedHour = hourStringOrNull(new Date(binding.createdAt));
+  const nowHour = hourStringOrNull(now);
+  return bindingCreatedHour !== null
+    && nowHour !== null
+    && isHourBefore(bindingCreatedHour, current.startHour)
+    && isHourAtOrBefore(current.startHour, nowHour);
 };
 
 const wasBoundBeforeWindowEnded = (binding: Pick<Binding, 'createdAt'>, window: UsageWindow): boolean => {
-  const bindingCreated = new Date(binding.createdAt).getTime();
-  const windowEnd = new Date(window.endAt).getTime();
-  return Number.isFinite(bindingCreated) && Number.isFinite(windowEnd) && bindingCreated < windowEnd;
+  const bindingCreatedHour = hourStringOrNull(new Date(binding.createdAt));
+  return bindingCreatedHour !== null && isHourBefore(bindingCreatedHour, window.endHour);
 };
+
+const isHourBefore = (left: string, right: string): boolean => left < right;
+
+const isHourAfter = (left: string, right: string): boolean => left > right;
+
+const isHourAtOrBefore = (left: string, right: string): boolean => left <= right;
+
+const isHourAtOrAfter = (left: string, right: string): boolean => left >= right;
+
+const hourStringOrNull = (date: Date): string | null =>
+  Number.isFinite(date.getTime()) ? hourString(date) : null;
 
 const completedWindowBefore = (current: UsageWindow): UsageWindow | null => {
   const currentStart = new Date(current.startAt);

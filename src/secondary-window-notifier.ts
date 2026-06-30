@@ -325,10 +325,9 @@ export class SecondaryWindowNotifier {
   }
 
   private enqueueOrApplySentNotification(candidates: NotificationCandidate[], candidate: NotificationCandidate): void {
-    const sent = this.options.store.getSecondaryWindowNotificationByHour(
+    const sent = this.options.store.getSecondaryWindowNotificationEndingByHour(
       candidate.binding.telegramUserId,
       candidate.upstream.id,
-      candidate.previousWindow.startHour,
       candidate.previousWindow.endHour,
     );
     if (!sent || !wasNotificationSentAfterWindowEnded(sent, candidate.previousWindow)) {

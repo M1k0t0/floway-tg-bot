@@ -619,6 +619,11 @@ describe('SecondaryWindowNotifier', () => {
     expect(store.getSecondaryWindowState('12345', 'up_a')?.windowStartAt).toBe('2026-06-29T11:01:31.799Z');
     expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-07-06T11:01:31.799Z');
     expect(store.getSecondaryWindowState('12345', 'up_a')?.usedPercent).toBe(6);
+
+    await notifier.pollOnce();
+
+    expect(messages).toHaveLength(1);
+    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-22T11:01:31.799Z', '2026-06-29T11:01:31.799Z')).toBeNull();
   });
 
   it('treats a current window that starts in the previous end hour as a natural refresh', async () => {

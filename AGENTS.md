@@ -84,9 +84,10 @@ window advances.
 
 Important invariants:
 
-- Compare window start/end boundaries at hour precision for routing decisions;
-  Floway timestamps can drift by seconds or milliseconds. Preserve exact
-  `startAt`/`endAt` values for display, storage, and usage summarization.
+- Compare window start/end boundaries with a five-hour debounce for routing
+  decisions; Floway timestamps can drift by seconds, milliseconds, or a few
+  hours. Preserve exact `startAt`/`endAt` values for display, storage, and usage
+  summarization.
 - Treat a new window that starts inside the stored window and extends past it
   as an upstream early/manual refresh. Report the stored window truncated at
   the new start and include an explicit notification note.

@@ -57,6 +57,8 @@ interface WindowRefresh {
   currentWindow: UsageWindow;
 }
 
+const WINDOW_BOUNDARY_DEBOUNCE_MS = 5 * 60 * 60 * 1000;
+
 export class SecondaryWindowNotifier {
   private timer: ReturnType<typeof setInterval> | null = null;
   private activePoll: Promise<void> | null = null;
@@ -380,24 +382,56 @@ const formatPreviousQuotaEstimate = (
 const didWindowRefresh = (previous: SecondaryWindowState, current: UsageWindow): boolean => {
   const stored = windowFromState(previous);
   if (isSameWindowPeriod(stored, current)) return false;
-  return isHourAfter(current.endHour, stored.endHour);
+  return isBoundaryAfterOutsideDebounce(current.endAt, stored.endAt);
 };
 
 const isWindowAtLeast = (previous: SecondaryWindowState, current: UsageWindow): boolean => {
   const stored = windowFromState(previous);
-  return isHourAtOrAfter(current.endHour, stored.endHour);
+  return isSameWindowPeriod(stored, current) || isBoundaryAtOrAfter(current.endAt, stored.endAt);
 };
 
 const isManualWindowRefresh = (previous: SecondaryWindowState, current: UsageWindow): boolean => {
   const stored = windowFromState(previous);
   if (isSameWindowPeriod(stored, current)) return false;
-  return isHourAfter(current.startHour, stored.startHour)
-    && isHourBefore(current.startHour, stored.endHour)
-    && isHourAfter(current.endHour, stored.endHour);
+  return isBoundaryAfterOutsideDebounce(current.startAt, stored.startAt)
+    && isBoundaryBeforeOutsideDebounce(current.startAt, stored.endAt)
+    && isBoundaryAfterOutsideDebounce(current.endAt, stored.endAt);
 };
 
 const isSameWindowPeriod = (left: UsageWindow, right: UsageWindow): boolean =>
-  left.startHour === right.startHour && left.endHour === right.endHour;
+  isWithinWindowBoundaryDebounce(left.startAt, right.startAt)
+  && isWithinWindowBoundaryDebounce(left.endAt, right.endAt);
+
+const isWithinWindowBoundaryDebounce = (left: string, right: string): boolean => {
+  const leftMs = boundaryTime(left);
+  const rightMs = boundaryTime(right);
+  return leftMs !== null
+    && rightMs !== null
+    && Math.abs(leftMs - rightMs) <= WINDOW_BOUNDARY_DEBOUNCE_MS;
+};
+
+const isBoundaryBeforeOutsideDebounce = (left: string, right: string): boolean => {
+  const leftMs = boundaryTime(left);
+  const rightMs = boundaryTime(right);
+  return leftMs !== null && rightMs !== null && leftMs < rightMs - WINDOW_BOUNDARY_DEBOUNCE_MS;
+};
+
+const isBoundaryAfterOutsideDebounce = (left: string, right: string): boolean => {
+  const leftMs = boundaryTime(left);
+  const rightMs = boundaryTime(right);
+  return leftMs !== null && rightMs !== null && leftMs > rightMs + WINDOW_BOUNDARY_DEBOUNCE_MS;
+};
+
+const isBoundaryAtOrAfter = (left: string, right: string): boolean => {
+  const leftMs = boundaryTime(left);
+  const rightMs = boundaryTime(right);
+  return leftMs !== null && rightMs !== null && leftMs >= rightMs;
+};
+
+const boundaryTime = (value: string): number | null => {
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) ? time : null;
+};
 
 const isWindowFromFuture = (window: UsageWindow, now: Date): boolean => {
   const nowHour = hourStringOrNull(now);

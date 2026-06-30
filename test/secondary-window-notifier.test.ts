@@ -492,7 +492,7 @@ describe('SecondaryWindowNotifier', () => {
     expect(store.getSecondaryWindowState('12345', 'up_a')?.usedPercent).toBe(3);
   });
 
-  it('does not treat same-window reset timestamp drift as a refresh', async () => {
+  it('does not treat same-window reset boundary drift within five hours as a refresh', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-21T00:00:00.000Z'));
     const store = createStore();
@@ -519,7 +519,7 @@ describe('SecondaryWindowNotifier', () => {
 
     const messages: Array<{ chatId: string; text: string }> = [];
     const floway = {
-      listUpstreams: async () => [upstreamWithSecondaryReset('2026-07-05T00:51:18.025Z', 3)],
+      listUpstreams: async () => [upstreamWithSecondaryReset('2026-07-05T05:51:17.124Z', 3)],
       listUsers: async () => {
         throw new Error('users should not be listed without notification candidates');
       },
@@ -545,12 +545,12 @@ describe('SecondaryWindowNotifier', () => {
     await notifier.pollOnce();
 
     expect(messages).toEqual([]);
-    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-28T00:51:18.025Z', '2026-07-05T00:51:18.025Z')).toBeNull();
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-07-05T00:51:18.025Z');
+    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-28T05:51:17.124Z', '2026-07-05T05:51:17.124Z')).toBeNull();
+    expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-07-05T05:51:17.124Z');
     expect(store.getSecondaryWindowState('12345', 'up_a')?.usedPercent).toBe(3);
   });
 
-  it('reports a manually refreshed overlapping window using the new window start as the previous end', async () => {
+  it('reports a manually refreshed overlapping window only beyond the five-hour boundary debounce', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-21T00:00:00.000Z'));
     const store = createStore();
@@ -586,7 +586,7 @@ describe('SecondaryWindowNotifier', () => {
       ],
     };
     const floway = {
-      listUpstreams: async () => [upstreamWithSecondaryReset('2026-07-06T11:01:31.799Z', 6)],
+      listUpstreams: async () => [upstreamWithSecondaryReset('2026-07-06T06:01:31.799Z', 6)],
       listUsers: async () => [
         { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
       ],
@@ -610,20 +610,20 @@ describe('SecondaryWindowNotifier', () => {
     await notifier.pollOnce();
 
     expect(messages).toHaveLength(1);
-    expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-28T00:51:18.169Z</code> -> <code>2026-06-29T11:01:31.799Z</code>');
+    expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-28T00:51:18.169Z</code> -> <code>2026-06-29T06:01:31.799Z</code>');
     expect(messages[0]!.text).toContain('<b>Window note</b>: Upstream refreshed this secondary window early; this is not a natural cycle.');
     expect(messages[0]!.text).toContain('<b>Your upstream tokens</b>: <b>100</b>');
     expect(messages[0]!.text).not.toContain('999');
-    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-22T11:01:31.799Z', '2026-06-29T11:01:31.799Z')).toBeNull();
-    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-28T00:51:18.169Z', '2026-06-29T11:01:31.799Z')).not.toBeNull();
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.windowStartAt).toBe('2026-06-29T11:01:31.799Z');
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-07-06T11:01:31.799Z');
+    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-22T06:01:31.799Z', '2026-06-29T06:01:31.799Z')).toBeNull();
+    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-28T00:51:18.169Z', '2026-06-29T06:01:31.799Z')).not.toBeNull();
+    expect(store.getSecondaryWindowState('12345', 'up_a')?.windowStartAt).toBe('2026-06-29T06:01:31.799Z');
+    expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-07-06T06:01:31.799Z');
     expect(store.getSecondaryWindowState('12345', 'up_a')?.usedPercent).toBe(6);
 
     await notifier.pollOnce();
 
     expect(messages).toHaveLength(1);
-    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-22T11:01:31.799Z', '2026-06-29T11:01:31.799Z')).toBeNull();
+    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-22T06:01:31.799Z', '2026-06-29T06:01:31.799Z')).toBeNull();
   });
 
   it('treats a current window that starts in the previous end hour as a natural refresh', async () => {

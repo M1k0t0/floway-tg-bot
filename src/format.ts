@@ -25,6 +25,7 @@ export const html = (value: unknown): string =>
 
 const bold = (value: unknown): string => `<b>${html(value)}</b>`;
 const code = (value: unknown): string => `<code>${html(value)}</code>`;
+const spoiler = (value: unknown): string => `<tg-spoiler>${html(value)}</tg-spoiler>`;
 const label = (name: string, value: unknown): string => `${bold(name)}: ${value}`;
 const blockTitle = (name: string): string => bold(name);
 
@@ -226,17 +227,32 @@ export const formatUpstreamDetail = (
   return lines.join('\n');
 };
 
+export interface CopyTextInlineKeyboardMarkup {
+  inline_keyboard: Array<Array<{ text: string; copy_text: { text: string } }>>;
+}
+
 export const formatKeys = (keys: readonly ApiKeyRecord[]): string => {
   if (keys.length === 0) return blockTitle('No active keys.');
   return [
     blockTitle(`Your Floway API keys (${keys.length})`),
     ...keys.map(key => [
       `${bold(key.name)} ${code(key.id)}`,
+      `  ${label('Secret', spoiler(key.key))}`,
       `  ${label('Created', code(key.created_at))}`,
       `  ${label('Last used', key.last_used_at ? code(key.last_used_at) : 'never')}`,
       `  ${label('Upstreams', key.upstream_ids ? key.upstream_ids.map(id => code(id)).join(', ') : 'all allowed by user')}`,
     ].join('\n')),
   ].join('\n\n');
+};
+
+export const formatKeyCopyMarkup = (keys: readonly ApiKeyRecord[]): CopyTextInlineKeyboardMarkup | undefined => {
+  if (keys.length === 0) return undefined;
+  return {
+    inline_keyboard: keys.map(key => [{
+      text: `Copy ${key.id}`,
+      copy_text: { text: key.key },
+    }]),
+  };
 };
 
 export const formatCreatedKey = (key: ApiKeyRecord, verb: 'created' | 'rotated'): string =>

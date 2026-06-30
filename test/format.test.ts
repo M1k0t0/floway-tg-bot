@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   formatBindDeepLinkSuccess,
   formatInfo,
+  formatKeyCopyMarkup,
   formatKeys,
   formatQuotaEstimate,
   formatQuotaEstimateInsufficient,
@@ -42,7 +43,7 @@ describe('formatters', () => {
     const key: ApiKeyRecord = {
       id: 'key_1',
       name: 'main <prod>',
-      key: 'sk-test',
+      key: 'sk-<test>&',
       created_at: '2026-06-21T00:00:00.000Z',
       last_used_at: null,
       upstream_ids: ['up_a'],
@@ -50,7 +51,11 @@ describe('formatters', () => {
 
     const text = formatKeys([key]);
     expect(text).toContain('<b>main &lt;prod&gt;</b>');
+    expect(text).toContain('<b>Secret</b>: <tg-spoiler>sk-&lt;test&gt;&amp;</tg-spoiler>');
     expect(text).toContain('<code>up_a</code>');
+    expect(formatKeyCopyMarkup([key])).toEqual({
+      inline_keyboard: [[{ text: 'Copy key_1', copy_text: { text: 'sk-<test>&' } }]],
+    });
   });
 
   it('formats endpoint info and escapes the base URL', () => {

@@ -8,6 +8,7 @@ import {
   formatBindDeepLinkSuccess,
   formatCreatedKey,
   formatInfo,
+  formatKeyCopyMarkup,
   formatKeys,
   formatQuotaEstimate,
   formatQuotaEstimateInsufficient,
@@ -172,7 +173,7 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
     if (!bound) return;
     try {
       const keys = await floway.listKeys(bound.binding.flowaySession);
-      await replyLong(ctx, formatKeys(keys));
+      await replyLong(ctx, formatKeys(keys), formatKeyCopyMarkup(keys));
     } catch (error) {
       await replyError(ctx, 'Failed to load keys', error);
     }
@@ -483,8 +484,15 @@ const requireBinding = async (ctx: Context, store: BindingStore, floway: FlowayC
   }
 };
 
-const replyLong = async (ctx: Context, text: string): Promise<void> => {
-  for (const chunk of splitMessage(text)) await ctx.reply(chunk, { parse_mode: 'HTML' });
+const replyLong = async (ctx: Context, text: string, replyMarkup?: ReturnType<typeof formatKeyCopyMarkup>): Promise<void> => {
+  const chunks = splitMessage(text);
+  for (const [index, chunk] of chunks.entries()) {
+    const extra = {
+      parse_mode: 'HTML',
+      ...(index === chunks.length - 1 && replyMarkup ? { reply_markup: replyMarkup } : {}),
+    } as unknown as NonNullable<Parameters<Context['reply']>[1]>;
+    await ctx.reply(chunk, extra);
+  }
 };
 
 const replyError = async (ctx: Context, prefix: string, error: unknown): Promise<void> => {

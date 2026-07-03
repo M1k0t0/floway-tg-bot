@@ -35,6 +35,8 @@ export interface CodexQuotaBucket {
   snapshot: CodexQuotaSnapshot;
 }
 
+export const CODEX_QUOTA_ACTIVE_LIMIT = 'premium';
+
 export interface UsageWindowReport {
   window: UsageWindow;
   user: UsageTotals;
@@ -155,9 +157,8 @@ export const hourString = (date: Date): string => date.toISOString().slice(0, 13
 
 export const codexQuotaBucketsForUpstream = (upstream: Pick<UpstreamRecord, 'provider' | 'codex_quota'>): CodexQuotaBucket[] => {
   if (upstream.provider !== 'codex' || !upstream.codex_quota) return [];
-  return Object.entries(upstream.codex_quota)
-    .map(([key, snapshot]) => ({ key, snapshot }))
-    .sort((a, b) => a.key.localeCompare(b.key));
+  const premium = upstream.codex_quota[CODEX_QUOTA_ACTIVE_LIMIT];
+  return premium ? [{ key: CODEX_QUOTA_ACTIVE_LIMIT, snapshot: premium }] : [];
 };
 
 export const computeWindowsForUpstream = (upstream: Pick<UpstreamRecord, 'provider' | 'codex_quota'>): UsageWindow[] =>
@@ -166,17 +167,10 @@ export const computeWindowsForUpstream = (upstream: Pick<UpstreamRecord, 'provid
 export const computeWindowsForQuotaBucket = (bucket: CodexQuotaBucket): UsageWindow[] =>
   computeWindowsFromQuota(bucket.snapshot, bucket);
 
-export const selectSecondaryQuotaWindowForUpstream = (upstream: Pick<UpstreamRecord, 'provider' | 'codex_quota'>): UsageWindow | null => {
-  const candidates = codexQuotaBucketsForUpstream(upstream)
-    .map(bucket => {
-      const window = computeWindowsForQuotaBucket(bucket).find(candidate => candidate.label === 'Secondary window') ?? null;
-      const observedMs = new Date(bucket.snapshot.observed_at).getTime();
-      return window && Number.isFinite(observedMs) ? { bucket, window, observedMs } : null;
-    })
-    .filter(candidate => candidate !== null);
-  candidates.sort((a, b) => b.observedMs - a.observedMs || a.bucket.key.localeCompare(b.bucket.key));
-  return candidates[0]?.window ?? null;
-};
+export const selectSecondaryQuotaWindowForUpstream = (upstream: Pick<UpstreamRecord, 'provider' | 'codex_quota'>): UsageWindow | null =>
+  codexQuotaBucketsForUpstream(upstream)
+    .flatMap(bucket => computeWindowsForQuotaBucket(bucket))
+    .find(window => window.label === 'Secondary window') ?? null;
 
 export const computeWindowsFromQuota = (quota: WindowQuotaSnapshot | null | undefined, bucket?: Pick<CodexQuotaBucket, 'key' | 'snapshot'>): UsageWindow[] => {
   if (!quota) return [];

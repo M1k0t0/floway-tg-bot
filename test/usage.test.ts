@@ -55,66 +55,41 @@ describe('usage windows', () => {
     expect(computeWindowsForUpstream({ provider: 'custom', codex_quota: { premium: codexQuota } })).toEqual([]);
   });
 
-  it('labels quota windows from every active-limit bucket', () => {
+  it('uses only the premium active-limit bucket for quota windows', () => {
     const windows = computeWindowsForUpstream({
       provider: 'codex',
       codex_quota: {
+        enterprise: {
+          observed_at: '2026-06-21T00:01:00.000Z',
+          active_limit: 'enterprise',
+          secondary_used_percent: 20,
+          secondary_window_minutes: 10080,
+          secondary_reset_after_at: '2026-06-28T00:00:00.000Z',
+        },
         premium: {
           observed_at: '2026-06-21T00:00:00.000Z',
           active_limit: 'premium',
           primary_used_percent: 10,
           primary_window_minutes: 300,
           primary_reset_after_at: '2026-06-21T05:00:00.000Z',
-        },
-        unknown: {
-          observed_at: '2026-06-21T00:01:00.000Z',
-          secondary_used_percent: 20,
+          secondary_used_percent: 30,
           secondary_window_minutes: 10080,
-          secondary_reset_after_at: '2026-06-28T00:00:00.000Z',
+          secondary_reset_after_at: '2026-06-28T02:00:00.000Z',
         },
       },
     });
 
     expect(windows).toEqual([
       expect.objectContaining({ label: 'Primary window', quotaBucketKey: 'premium', quotaActiveLimit: 'premium' }),
-      expect.objectContaining({ label: 'Secondary window', quotaBucketKey: 'unknown' }),
+      expect.objectContaining({ label: 'Secondary window', quotaBucketKey: 'premium', upstreamPercent: 30 }),
     ]);
-  });
-
-  it('selects the newest valid secondary quota window deterministically', () => {
-    const upstream = {
-      provider: 'codex',
-      codex_quota: {
-        older: {
-          observed_at: '2026-06-21T00:00:00.000Z',
-          secondary_window_minutes: 10080,
-          secondary_reset_after_at: '2026-06-28T00:00:00.000Z',
-          secondary_used_percent: 10,
-        },
-        latest_b: {
-          observed_at: '2026-06-21T01:00:00.000Z',
-          secondary_window_minutes: 10080,
-          secondary_reset_after_at: '2026-06-28T01:00:00.000Z',
-          secondary_used_percent: 20,
-        },
-        latest_a: {
-          observed_at: '2026-06-21T01:00:00.000Z',
-          secondary_window_minutes: 10080,
-          secondary_reset_after_at: '2026-06-28T02:00:00.000Z',
-          secondary_used_percent: 30,
-        },
-        invalid: {
-          observed_at: '2026-06-21T02:00:00.000Z',
-          secondary_used_percent: 99,
-        },
-      },
-    };
-
-    expect(selectSecondaryQuotaWindowForUpstream(upstream)).toMatchObject({
-      quotaBucketKey: 'latest_a',
-      upstreamPercent: 30,
-      endAt: '2026-06-28T02:00:00.000Z',
-    });
+    expect(selectSecondaryQuotaWindowForUpstream({ provider: 'codex', codex_quota: { enterprise: {
+      observed_at: '2026-06-21T00:01:00.000Z',
+      active_limit: 'enterprise',
+      secondary_used_percent: 20,
+      secondary_window_minutes: 10080,
+      secondary_reset_after_at: '2026-06-28T00:00:00.000Z',
+    } } })).toBeNull();
   });
 });
 

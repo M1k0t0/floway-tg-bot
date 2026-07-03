@@ -45,6 +45,9 @@ Binding, upstream, key, usage, quota, and leaderboard operations are private-cha
 Passwords are exchanged for a Floway session and are never stored. Floway
 sessions are encrypted locally with `BOT_SECRET_KEY`.
 
+Codex quota output may show multiple active-limit buckets. Usage totals are
+upstream-wide and are not separated by active-limit bucket.
+
 The bot also polls available upstreams and sends bound users a private summary
 when an upstream's Codex secondary window advances. Tune the poll interval with
 `SECONDARY_WINDOW_NOTIFY_INTERVAL_SECONDS`.

@@ -26,6 +26,13 @@ export interface UsageWindow {
   startAt: string;
   endAt: string;
   upstreamPercent?: number;
+  quotaBucketKey?: string;
+  quotaActiveLimit?: string;
+}
+
+export interface CodexQuotaBucket {
+  key: string;
+  snapshot: CodexQuotaSnapshot;
 }
 
 export interface UsageWindowReport {
@@ -146,24 +153,37 @@ export const addUsageRecord = (totals: UsageTotals, record: UsageRecord): void =
 
 export const hourString = (date: Date): string => date.toISOString().slice(0, 13);
 
-export const computeWindowsForUpstream = (upstream: Pick<UpstreamRecord, 'provider' | 'codex_quota'>): UsageWindow[] =>
-  computeWindowsFromQuota(quotaWindowSnapshotForUpstream(upstream));
-
-export const quotaWindowSnapshotForUpstream = (upstream: Pick<UpstreamRecord, 'provider' | 'codex_quota'>): WindowQuotaSnapshot | null => {
-  switch (upstream.provider) {
-  case 'codex':
-    return upstream.codex_quota ?? null;
-  default:
-    return null;
-  }
+export const codexQuotaBucketsForUpstream = (upstream: Pick<UpstreamRecord, 'provider' | 'codex_quota'>): CodexQuotaBucket[] => {
+  if (upstream.provider !== 'codex' || !upstream.codex_quota) return [];
+  return Object.entries(upstream.codex_quota)
+    .map(([key, snapshot]) => ({ key, snapshot }))
+    .sort((a, b) => a.key.localeCompare(b.key));
 };
 
-export const computeWindowsFromQuota = (quota: WindowQuotaSnapshot | null | undefined): UsageWindow[] => {
+export const computeWindowsForUpstream = (upstream: Pick<UpstreamRecord, 'provider' | 'codex_quota'>): UsageWindow[] =>
+  codexQuotaBucketsForUpstream(upstream).flatMap(bucket => computeWindowsForQuotaBucket(bucket));
+
+export const computeWindowsForQuotaBucket = (bucket: CodexQuotaBucket): UsageWindow[] =>
+  computeWindowsFromQuota(bucket.snapshot, bucket);
+
+export const selectSecondaryQuotaWindowForUpstream = (upstream: Pick<UpstreamRecord, 'provider' | 'codex_quota'>): UsageWindow | null => {
+  const candidates = codexQuotaBucketsForUpstream(upstream)
+    .map(bucket => {
+      const window = computeWindowsForQuotaBucket(bucket).find(candidate => candidate.label === 'Secondary window') ?? null;
+      const observedMs = new Date(bucket.snapshot.observed_at).getTime();
+      return window && Number.isFinite(observedMs) ? { bucket, window, observedMs } : null;
+    })
+    .filter(candidate => candidate !== null);
+  candidates.sort((a, b) => b.observedMs - a.observedMs || a.bucket.key.localeCompare(b.bucket.key));
+  return candidates[0]?.window ?? null;
+};
+
+export const computeWindowsFromQuota = (quota: WindowQuotaSnapshot | null | undefined, bucket?: Pick<CodexQuotaBucket, 'key' | 'snapshot'>): UsageWindow[] => {
   if (!quota) return [];
   const windows: UsageWindow[] = [];
-  const primary = quotaWindow('Primary window', quota.primary_window_minutes, quota.primary_reset_after_at, quota.primary_used_percent);
+  const primary = quotaWindow('Primary window', quota.primary_window_minutes, quota.primary_reset_after_at, quota.primary_used_percent, bucket);
   if (primary) windows.push(primary);
-  const secondary = quotaWindow('Secondary window', quota.secondary_window_minutes, quota.secondary_reset_after_at, quota.secondary_used_percent);
+  const secondary = quotaWindow('Secondary window', quota.secondary_window_minutes, quota.secondary_reset_after_at, quota.secondary_used_percent, bucket);
   if (secondary) windows.push(secondary);
   return windows;
 };
@@ -324,6 +344,7 @@ const quotaWindow = (
   minutes: number | undefined,
   resetAt: string | undefined,
   upstreamPercent: number | undefined,
+  bucket?: Pick<CodexQuotaBucket, 'key' | 'snapshot'>,
 ): UsageWindow | null => {
   if (!minutes || !resetAt) return null;
   const end = new Date(resetAt);
@@ -336,5 +357,7 @@ const quotaWindow = (
     startHour: hourString(start),
     endHour: hourString(end),
     ...(upstreamPercent !== undefined ? { upstreamPercent } : {}),
+    ...(bucket ? { quotaBucketKey: bucket.key } : {}),
+    ...(bucket?.snapshot.active_limit ? { quotaActiveLimit: bucket.snapshot.active_limit } : {}),
   };
 };

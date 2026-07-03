@@ -74,6 +74,8 @@ export interface CodexQuotaSnapshot {
   ratelimited_until?: string;
 }
 
+export type CodexQuotaSnapshotMap = Record<string, CodexQuotaSnapshot>;
+
 export interface UpstreamRecord {
   id: string;
   provider: string;
@@ -88,7 +90,7 @@ export interface UpstreamRecord {
   config: unknown;
   state: unknown;
   modelsCache?: ModelsCacheStatus;
-  codex_quota?: CodexQuotaSnapshot | null;
+  codex_quota?: CodexQuotaSnapshotMap | null;
 }
 
 export interface UpstreamModelRecord {

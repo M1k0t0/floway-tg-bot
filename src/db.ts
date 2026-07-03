@@ -21,7 +21,12 @@ interface SecondaryWindowStateRow {
   window_start_at: string;
   reset_after_at: string;
   used_percent: number | null;
+  quota_bucket_key: string | null;
   updated_at: string;
+}
+
+interface TableInfoRow {
+  name: string;
 }
 
 interface SecondaryWindowNotificationRow {
@@ -38,6 +43,7 @@ export interface SecondaryWindowState {
   windowStartAt: string;
   resetAfterAt: string;
   usedPercent: number | null;
+  quotaBucketKey: string | null;
   updatedAt: string;
 }
 
@@ -76,10 +82,12 @@ export class BindingStore {
         window_start_at TEXT NOT NULL,
         reset_after_at TEXT NOT NULL,
         used_percent REAL,
+        quota_bucket_key TEXT,
         updated_at TEXT NOT NULL,
         PRIMARY KEY (telegram_user_id, upstream_id)
       )
     `);
+    this.ensureSecondaryWindowStateSchema();
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS secondary_window_notification (
         telegram_user_id TEXT NOT NULL,
@@ -145,7 +153,7 @@ export class BindingStore {
 
   getSecondaryWindowState(telegramUserId: string, upstreamId: string): SecondaryWindowState | null {
     const row = this.db
-      .prepare('SELECT telegram_user_id, upstream_id, window_start_at, reset_after_at, used_percent, updated_at FROM secondary_window_state WHERE telegram_user_id = ? AND upstream_id = ?')
+      .prepare('SELECT telegram_user_id, upstream_id, window_start_at, reset_after_at, used_percent, quota_bucket_key, updated_at FROM secondary_window_state WHERE telegram_user_id = ? AND upstream_id = ?')
       .get(telegramUserId, upstreamId) as SecondaryWindowStateRow | undefined;
     return row ? secondaryWindowStateFromRow(row) : null;
   }
@@ -154,15 +162,16 @@ export class BindingStore {
     const now = new Date().toISOString();
     this.db
       .prepare(`
-        INSERT INTO secondary_window_state (telegram_user_id, upstream_id, window_start_at, reset_after_at, used_percent, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO secondary_window_state (telegram_user_id, upstream_id, window_start_at, reset_after_at, used_percent, quota_bucket_key, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (telegram_user_id, upstream_id) DO UPDATE SET
           window_start_at = excluded.window_start_at,
           reset_after_at = excluded.reset_after_at,
           used_percent = excluded.used_percent,
+          quota_bucket_key = excluded.quota_bucket_key,
           updated_at = excluded.updated_at
       `)
-      .run(input.telegramUserId, input.upstreamId, input.windowStartAt, input.resetAfterAt, input.usedPercent, now);
+      .run(input.telegramUserId, input.upstreamId, input.windowStartAt, input.resetAfterAt, input.usedPercent, input.quotaBucketKey, now);
     return { ...input, updatedAt: now };
   }
 
@@ -256,6 +265,13 @@ export class BindingStore {
     this.db.close();
   }
 
+  private ensureSecondaryWindowStateSchema(): void {
+    const columns = this.db.prepare('PRAGMA table_info(secondary_window_state)').all() as unknown as TableInfoRow[];
+    if (!columns.some(column => column.name === 'quota_bucket_key')) {
+      this.db.exec('ALTER TABLE secondary_window_state ADD COLUMN quota_bucket_key TEXT');
+    }
+  }
+
   private bindingFromRow(row: BindingRow): Binding {
     return {
       telegramUserId: row.telegram_user_id,
@@ -274,6 +290,7 @@ const secondaryWindowStateFromRow = (row: SecondaryWindowStateRow): SecondaryWin
   windowStartAt: row.window_start_at,
   resetAfterAt: row.reset_after_at,
   usedPercent: row.used_percent,
+  quotaBucketKey: row.quota_bucket_key,
   updatedAt: row.updated_at,
 });
 

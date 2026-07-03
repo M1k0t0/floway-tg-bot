@@ -221,8 +221,13 @@ describe('formatters', () => {
 
     const text = formatQuotaEstimateInsufficient(
       upstream,
-      '2026-06-15T00:00:00.000Z',
-      '2026-06-22T00:00:00.000Z',
+      {
+        label: 'Secondary window',
+        startAt: '2026-06-15T00:00:00.000Z',
+        endAt: '2026-06-22T00:00:00.000Z',
+        startHour: '2026-06-15T00',
+        endHour: '2026-06-22T00',
+      },
       0.4,
     );
     expect(text).toContain('<b>Upstream secondary used</b>:\n[|              ] <b>0.40%</b>');

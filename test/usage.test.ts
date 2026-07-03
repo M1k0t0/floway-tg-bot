@@ -92,6 +92,22 @@ describe('usage windows', () => {
       secondary_reset_after_at: '2026-06-28T00:00:00.000Z',
     } } })).toBeNull();
   });
+
+  it('matches premium active-limit snapshots with normalized names and legacy keys', () => {
+    expect(selectSecondaryQuotaWindowForUpstream({ provider: 'codex', codex_quota: { 'chatgpt-plus': {
+      observed_at: '2026-06-21T00:00:00.000Z',
+      active_limit: ' Premium ',
+      secondary_used_percent: 44,
+      secondary_window_minutes: 10080,
+      secondary_reset_after_at: '2026-06-28T00:00:00.000Z',
+    } } })).toMatchObject({ quotaBucketKey: 'chatgpt-plus', upstreamPercent: 44 });
+    expect(selectSecondaryQuotaWindowForUpstream({ provider: 'codex', codex_quota: { premium: {
+      observed_at: '2026-06-21T00:00:00.000Z',
+      secondary_used_percent: 55,
+      secondary_window_minutes: 10080,
+      secondary_reset_after_at: '2026-06-28T00:00:00.000Z',
+    } } })).toMatchObject({ quotaBucketKey: 'premium', upstreamPercent: 55 });
+  });
 });
 
 describe('usage cost', () => {

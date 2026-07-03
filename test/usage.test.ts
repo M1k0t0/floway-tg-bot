@@ -43,16 +43,17 @@ describe('usage windows', () => {
     expect(computeWindowsFromQuota({ observed_at: 'x' })).toEqual([]);
   });
 
-  it('reads quota windows only from providers that expose a window quota snapshot', () => {
+  it('reads quota windows only from providers that expose a premium active-limit snapshot', () => {
     const codexQuota = {
       observed_at: '2026-06-21T00:00:00.000Z',
+      active_limit: 'premium',
       secondary_used_percent: 90,
       secondary_window_minutes: 10080,
       secondary_reset_after_at: '2026-06-28T00:00:00.000Z',
     };
 
-    expect(computeWindowsForUpstream({ provider: 'codex', codex_quota: { premium: codexQuota } })).toHaveLength(1);
-    expect(computeWindowsForUpstream({ provider: 'custom', codex_quota: { premium: codexQuota } })).toEqual([]);
+    expect(computeWindowsForUpstream({ provider: 'codex', codex_quota: { 'chatgpt-plus': codexQuota } })).toHaveLength(1);
+    expect(computeWindowsForUpstream({ provider: 'custom', codex_quota: { 'chatgpt-plus': codexQuota } })).toEqual([]);
   });
 
   it('uses only the premium active-limit bucket for quota windows', () => {

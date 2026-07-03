@@ -157,8 +157,10 @@ export const hourString = (date: Date): string => date.toISOString().slice(0, 13
 
 export const codexQuotaBucketsForUpstream = (upstream: Pick<UpstreamRecord, 'provider' | 'codex_quota'>): CodexQuotaBucket[] => {
   if (upstream.provider !== 'codex' || !upstream.codex_quota) return [];
-  const premium = upstream.codex_quota[CODEX_QUOTA_ACTIVE_LIMIT];
-  return premium ? [{ key: CODEX_QUOTA_ACTIVE_LIMIT, snapshot: premium }] : [];
+  return Object.entries(upstream.codex_quota)
+    .filter(([, snapshot]) => snapshot.active_limit === CODEX_QUOTA_ACTIVE_LIMIT)
+    .map(([key, snapshot]) => ({ key, snapshot }))
+    .sort((a, b) => a.key.localeCompare(b.key));
 };
 
 export const computeWindowsForUpstream = (upstream: Pick<UpstreamRecord, 'provider' | 'codex_quota'>): UsageWindow[] =>

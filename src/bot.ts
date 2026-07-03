@@ -28,6 +28,7 @@ import {
   canShareUpstreamQuota,
   computeWindowsForUpstream,
   selectSecondaryQuotaWindowForUpstream,
+  upstreamProvider,
   summarizeUsageLeaderboard,
   summarizeUsageQuotaEstimate,
   summarizeUsageWindow,
@@ -157,7 +158,7 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
       const upstream = selection.upstream;
       const [models, copilotQuota] = await Promise.all([
         floway.getUpstreamModels(upstream.id),
-        upstream.provider === 'copilot'
+        upstreamProvider(upstream) === 'copilot'
           ? floway.getCopilotQuota(upstream.id).catch(error => ({ error: error instanceof Error ? error.message : String(error) }))
           : Promise.resolve(null),
       ]);

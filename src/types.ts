@@ -78,7 +78,8 @@ export type CodexQuotaSnapshotMap = Record<string, CodexQuotaSnapshot>;
 
 export interface UpstreamRecord {
   id: string;
-  provider: string;
+  provider?: string;
+  kind?: string;
   name: string;
   enabled: boolean;
   sort_order: number;

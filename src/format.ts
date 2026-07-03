@@ -10,6 +10,7 @@ import {
   BILLING_DIMENSIONS,
   codexQuotaBucketsForUpstream,
   tokenTotal,
+  upstreamProvider,
   type CodexQuotaBucket,
   type UsageLeaderboardEntry,
   type UsageLeaderboardReport,
@@ -152,7 +153,7 @@ export const formatUpstreamList = (upstreams: readonly UpstreamRecord[]): string
     .map(upstream => {
       const status = upstream.enabled ? 'enabled' : 'disabled';
       const quotaLine = codexQuotaListSummary(upstream);
-      return `${upstream.sort_order}. ${bold(upstream.name)} ${code(upstream.id)}\n   ${code(upstream.provider)} | ${status}${quotaLine}`;
+      return `${upstream.sort_order}. ${bold(upstream.name)} ${code(upstream.id)}\n   ${code(upstreamProvider(upstream))} | ${status}${quotaLine}`;
     });
   return [blockTitle(`Floway upstreams (${upstreams.length})`), ...rows].join('\n\n');
 };
@@ -177,7 +178,7 @@ export const formatUpstreamDetail = (
 ): string => {
   const lines = [
     `${bold(upstream.name)} ${code(upstream.id)}`,
-    label('Provider', code(upstream.provider)),
+    label('Provider', code(upstreamProvider(upstream))),
     label('Status', upstream.enabled ? 'enabled' : 'disabled'),
     label('Sort order', code(upstream.sort_order)),
     label('Updated', code(upstream.updated_at)),

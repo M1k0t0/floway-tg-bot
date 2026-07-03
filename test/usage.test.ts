@@ -53,6 +53,7 @@ describe('usage windows', () => {
     };
 
     expect(computeWindowsForUpstream({ provider: 'codex', codex_quota: { 'chatgpt-plus': codexQuota } })).toHaveLength(1);
+    expect(computeWindowsForUpstream({ kind: 'codex', codex_quota: { 'chatgpt-plus': codexQuota } })).toHaveLength(1);
     expect(computeWindowsForUpstream({ provider: 'custom', codex_quota: { 'chatgpt-plus': codexQuota } })).toEqual([]);
   });
 

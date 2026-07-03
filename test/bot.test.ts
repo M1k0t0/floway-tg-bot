@@ -15,7 +15,7 @@ import type { UpstreamRecord } from '../src/types.js';
 
 const upstream = (id: string): UpstreamRecord => ({
   id,
-  provider: 'codex',
+  kind: 'codex',
   name: id,
   enabled: true,
   sort_order: 0,

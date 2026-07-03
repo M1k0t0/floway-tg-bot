@@ -20,7 +20,7 @@ describe('formatters', () => {
   it('escapes dynamic upstream fields for Telegram HTML', () => {
     const upstream: UpstreamRecord = {
       id: 'up_<a>&',
-      provider: 'codex',
+      kind: 'codex',
       name: 'Codex <main> & shared',
       enabled: true,
       sort_order: 1,
@@ -91,7 +91,7 @@ describe('formatters', () => {
   it('formats compact quota estimates by default', () => {
     const upstream: UpstreamRecord = {
       id: 'up_a',
-      provider: 'codex',
+      kind: 'codex',
       name: 'Codex <main>&',
       enabled: true,
       sort_order: 1,
@@ -137,7 +137,7 @@ describe('formatters', () => {
   it('formats verbose quota estimates with detailed fields', () => {
     const upstream: UpstreamRecord = {
       id: 'up_a',
-      provider: 'codex',
+      kind: 'codex',
       name: 'Codex <main>&',
       enabled: true,
       sort_order: 1,
@@ -206,7 +206,7 @@ describe('formatters', () => {
   it('formats low-information quota estimates after a limit refresh', () => {
     const upstream: UpstreamRecord = {
       id: 'up_a',
-      provider: 'codex',
+      kind: 'codex',
       name: 'Codex main',
       enabled: true,
       sort_order: 1,
@@ -273,7 +273,7 @@ describe('formatters', () => {
   it('formats secondary window refresh notifications', () => {
     const upstream: UpstreamRecord = {
       id: 'up_a',
-      provider: 'codex',
+      kind: 'codex',
       name: 'Codex <main>&',
       enabled: true,
       sort_order: 1,

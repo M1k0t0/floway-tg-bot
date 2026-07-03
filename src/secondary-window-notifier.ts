@@ -12,7 +12,6 @@ import {
   hourString,
   summarizeUsageQuotaEstimate,
   summarizeUsageWindow,
-  upstreamProvider,
   type UsageWindow,
 } from './usage.js';
 import type {
@@ -360,7 +359,7 @@ const secondaryWindowForUpstream = (upstream: UpstreamRecord): UsageWindow | nul
   selectSecondaryQuotaWindowForUpstream(upstream);
 
 const canUseMissingCodexQuotaState = (upstream: UpstreamRecord): boolean =>
-  upstreamProvider(upstream) === 'codex' && !upstream.codex_quota;
+  upstream.kind === 'codex' && !upstream.codex_quota;
 
 const formatPreviousQuotaEstimate = (
   candidate: NotificationCandidate,

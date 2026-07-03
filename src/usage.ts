@@ -155,11 +155,8 @@ export const addUsageRecord = (totals: UsageTotals, record: UsageRecord): void =
 
 export const hourString = (date: Date): string => date.toISOString().slice(0, 13);
 
-export const upstreamProvider = (upstream: Pick<UpstreamRecord, 'provider' | 'kind'>): string =>
-  upstream.provider ?? upstream.kind ?? 'unknown';
-
-export const codexQuotaBucketsForUpstream = (upstream: Pick<UpstreamRecord, 'provider' | 'kind' | 'codex_quota'>): CodexQuotaBucket[] => {
-  if (upstreamProvider(upstream) !== 'codex' || !upstream.codex_quota) return [];
+export const codexQuotaBucketsForUpstream = (upstream: Pick<UpstreamRecord, 'kind' | 'codex_quota'>): CodexQuotaBucket[] => {
+  if (upstream.kind !== 'codex' || !upstream.codex_quota) return [];
   return Object.entries(upstream.codex_quota)
     .filter(([key, snapshot]) => isPremiumCodexQuotaBucket(key, snapshot))
     .map(([key, snapshot]) => ({ key, snapshot }))
@@ -175,13 +172,13 @@ const normalizeCodexQuotaActiveLimit = (value: string | undefined): string | nul
   return normalized || null;
 };
 
-export const computeWindowsForUpstream = (upstream: Pick<UpstreamRecord, 'provider' | 'kind' | 'codex_quota'>): UsageWindow[] =>
+export const computeWindowsForUpstream = (upstream: Pick<UpstreamRecord, 'kind' | 'codex_quota'>): UsageWindow[] =>
   codexQuotaBucketsForUpstream(upstream).flatMap(bucket => computeWindowsForQuotaBucket(bucket));
 
 export const computeWindowsForQuotaBucket = (bucket: CodexQuotaBucket): UsageWindow[] =>
   computeWindowsFromQuota(bucket.snapshot, bucket);
 
-export const selectSecondaryQuotaWindowForUpstream = (upstream: Pick<UpstreamRecord, 'provider' | 'kind' | 'codex_quota'>): UsageWindow | null =>
+export const selectSecondaryQuotaWindowForUpstream = (upstream: Pick<UpstreamRecord, 'kind' | 'codex_quota'>): UsageWindow | null =>
   codexQuotaBucketsForUpstream(upstream)
     .flatMap(bucket => computeWindowsForQuotaBucket(bucket))
     .find(window => window.label === 'Secondary window') ?? null;

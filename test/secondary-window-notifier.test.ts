@@ -1044,7 +1044,7 @@ describe('SecondaryWindowNotifier', () => {
     const messages: Array<{ chatId: string; text: string }> = [];
     const unsupportedUpstream = {
       ...upstreamWithSecondaryReset('2026-06-22T00:00:00.000Z', 80),
-      provider: 'custom',
+      kind: 'custom',
       codex_quota: null,
     };
     const floway = {
@@ -1228,7 +1228,7 @@ const emptySnapshot = (): SanitizedExportSnapshot => ({
 
 const upstreamWithSecondaryReset = (resetAfterAt: string, usedPercent: number, id = 'up_a'): UpstreamRecord => ({
   id,
-  provider: 'codex',
+  kind: 'codex',
   name: 'Codex main',
   enabled: true,
   sort_order: 1,

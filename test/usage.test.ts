@@ -43,7 +43,7 @@ describe('usage windows', () => {
     expect(computeWindowsFromQuota({ observed_at: 'x' })).toEqual([]);
   });
 
-  it('reads quota windows only from providers that expose a premium active-limit snapshot', () => {
+  it('reads quota windows only from kinds that expose a premium active-limit snapshot', () => {
     const codexQuota = {
       observed_at: '2026-06-21T00:00:00.000Z',
       active_limit: 'premium',
@@ -52,14 +52,14 @@ describe('usage windows', () => {
       secondary_reset_after_at: '2026-06-28T00:00:00.000Z',
     };
 
-    expect(computeWindowsForUpstream({ provider: 'codex', codex_quota: { 'chatgpt-plus': codexQuota } })).toHaveLength(1);
     expect(computeWindowsForUpstream({ kind: 'codex', codex_quota: { 'chatgpt-plus': codexQuota } })).toHaveLength(1);
-    expect(computeWindowsForUpstream({ provider: 'custom', codex_quota: { 'chatgpt-plus': codexQuota } })).toEqual([]);
+    expect(computeWindowsForUpstream({ kind: 'codex', codex_quota: { 'chatgpt-plus': codexQuota } })).toHaveLength(1);
+    expect(computeWindowsForUpstream({ kind: 'custom', codex_quota: { 'chatgpt-plus': codexQuota } })).toEqual([]);
   });
 
   it('uses only the premium active-limit bucket for quota windows', () => {
     const windows = computeWindowsForUpstream({
-      provider: 'codex',
+      kind: 'codex',
       codex_quota: {
         enterprise: {
           observed_at: '2026-06-21T00:01:00.000Z',
@@ -85,7 +85,7 @@ describe('usage windows', () => {
       expect.objectContaining({ label: 'Primary window', quotaBucketKey: 'premium', quotaActiveLimit: 'premium' }),
       expect.objectContaining({ label: 'Secondary window', quotaBucketKey: 'premium', upstreamPercent: 30 }),
     ]);
-    expect(selectSecondaryQuotaWindowForUpstream({ provider: 'codex', codex_quota: { enterprise: {
+    expect(selectSecondaryQuotaWindowForUpstream({ kind: 'codex', codex_quota: { enterprise: {
       observed_at: '2026-06-21T00:01:00.000Z',
       active_limit: 'enterprise',
       secondary_used_percent: 20,
@@ -95,14 +95,14 @@ describe('usage windows', () => {
   });
 
   it('matches premium active-limit snapshots with normalized names and legacy keys', () => {
-    expect(selectSecondaryQuotaWindowForUpstream({ provider: 'codex', codex_quota: { 'chatgpt-plus': {
+    expect(selectSecondaryQuotaWindowForUpstream({ kind: 'codex', codex_quota: { 'chatgpt-plus': {
       observed_at: '2026-06-21T00:00:00.000Z',
       active_limit: ' Premium ',
       secondary_used_percent: 44,
       secondary_window_minutes: 10080,
       secondary_reset_after_at: '2026-06-28T00:00:00.000Z',
     } } })).toMatchObject({ quotaBucketKey: 'chatgpt-plus', upstreamPercent: 44 });
-    expect(selectSecondaryQuotaWindowForUpstream({ provider: 'codex', codex_quota: { premium: {
+    expect(selectSecondaryQuotaWindowForUpstream({ kind: 'codex', codex_quota: { premium: {
       observed_at: '2026-06-21T00:00:00.000Z',
       secondary_used_percent: 55,
       secondary_window_minutes: 10080,

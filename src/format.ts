@@ -9,7 +9,6 @@ import type {
 import {
   BILLING_DIMENSIONS,
   codexQuotaBucketsForUpstream,
-  selectSecondaryQuotaWindowForUpstream,
   tokenTotal,
   type CodexQuotaBucket,
   type UsageLeaderboardEntry,
@@ -187,7 +186,7 @@ export const formatUpstreamDetail = (
 
   const codexQuotaBuckets = codexQuotaBucketsForUpstream(upstream);
   if (codexQuotaBuckets.length > 0) {
-    lines.push('', blockTitle(codexQuotaBuckets.length === 1 ? 'Codex quota' : `Codex quota buckets (${codexQuotaBuckets.length})`));
+    lines.push('', blockTitle('Codex quota'));
     for (const bucket of codexQuotaBuckets) {
       lines.push(
         label('Bucket', quotaBucketLabel(bucket)),
@@ -253,10 +252,6 @@ export const formatUsageReports = (upstream: UpstreamRecord, reports: readonly U
     ].join('\n');
   }
   const lines = [`${blockTitle('Usage')} ${bold(upstream.name)} ${code(upstream.id)}`];
-  const bucketCount = new Set(reports.map(report => report.window.quotaBucketKey).filter(Boolean)).size;
-  if (bucketCount > 1) {
-    lines.push('Codex exposes multiple active-limit quota buckets. Usage totals are upstream-wide, not separated by active limit.');
-  }
   for (const report of reports) {
     lines.push(
       '',
@@ -442,20 +437,8 @@ const sharePercent = (value: number, total: number): number | null =>
 const codexQuotaListSummary = (upstream: UpstreamRecord): string => {
   const buckets = codexQuotaBucketsForUpstream(upstream);
   if (buckets.length === 0) return '';
-  if (buckets.length === 1) {
-    const bucket = buckets[0]!;
-    return `\n   quota ${quotaBucketLabel(bucket)}: primary ${bold(formatPercent(bucket.snapshot.primary_used_percent))}, secondary ${bold(formatPercent(bucket.snapshot.secondary_used_percent))}`;
-  }
-  const latest = selectSecondaryQuotaWindowForUpstream(upstream);
-  const primaryMax = maxPercent(buckets.map(bucket => bucket.snapshot.primary_used_percent));
-  const secondaryMax = maxPercent(buckets.map(bucket => bucket.snapshot.secondary_used_percent));
-  const latestLabel = latest ? `, latest ${usageWindowBucketLabel(latest)}` : '';
-  return `\n   quotas ${formatNumber(buckets.length)} buckets, max primary ${bold(formatPercent(primaryMax))}, max secondary ${bold(formatPercent(secondaryMax))}${latestLabel}`;
-};
-
-const maxPercent = (values: Array<number | undefined>): number | null => {
-  const finite = values.filter((value): value is number => value !== undefined && Number.isFinite(value));
-  return finite.length ? Math.max(...finite) : null;
+  const bucket = buckets[0]!;
+  return `\n   quota ${quotaBucketLabel(bucket)}: primary ${bold(formatPercent(bucket.snapshot.primary_used_percent))}, secondary ${bold(formatPercent(bucket.snapshot.secondary_used_percent))}`;
 };
 
 const quotaBucketLabel = (bucket: CodexQuotaBucket): string =>

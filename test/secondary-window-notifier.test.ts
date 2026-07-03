@@ -108,7 +108,7 @@ describe('SecondaryWindowNotifier', () => {
     expect(messages[0]!.text).not.toContain('999');
   });
 
-  it('selects the newest secondary-window bucket without notifying on bucket switches', async () => {
+  it('uses only the premium secondary-window bucket when other buckets exist', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-22T12:00:00.000Z'));
     const store = createStore();
@@ -169,21 +169,23 @@ describe('SecondaryWindowNotifier', () => {
     expect(messages).toEqual([]);
     expect(exportCalls).toBe(0);
     expect(store.getSecondaryWindowState('12345', 'up_a')).toMatchObject({
-      quotaBucketKey: 'enterprise',
+      quotaBucketKey: 'premium',
+      windowStartAt: '2026-06-22T00:00:00.000Z',
       resetAfterAt: '2026-06-29T00:00:00.000Z',
-      usedPercent: 12,
+      usedPercent: null,
     });
 
-    currentUpstream = upstreamWithSecondaryReset('2026-06-22T00:00:00.000Z', 80);
+    currentUpstream = {
+      ...currentUpstream,
+      codex_quota: {
+        enterprise: currentUpstream.codex_quota!.enterprise!,
+      },
+    };
     await notifier.pollOnce();
 
     expect(messages).toEqual([]);
     expect(exportCalls).toBe(0);
-    expect(store.getSecondaryWindowState('12345', 'up_a')).toMatchObject({
-      quotaBucketKey: 'premium',
-      resetAfterAt: '2026-06-22T00:00:00.000Z',
-      usedPercent: 80,
-    });
+    expect(store.getSecondaryWindowState('12345', 'up_a')).toBeNull();
   });
 
   it('sends a catch-up notification when state is missing after the current secondary window started', async () => {

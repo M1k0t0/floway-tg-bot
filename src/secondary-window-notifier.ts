@@ -8,7 +8,7 @@ import {
 } from './format.js';
 import {
   canShareUpstreamQuota,
-  computeWindowsForUpstream,
+  selectSecondaryQuotaWindowForUpstream,
   hourString,
   summarizeUsageQuotaEstimate,
   summarizeUsageWindow,
@@ -177,6 +177,11 @@ export class SecondaryWindowNotifier {
         }
 
         const currentState = windowState(bound.binding, upstream.id, currentWindow, currentWindow.upstreamPercent ?? null);
+
+        if (previous && didQuotaBucketChange(previous, currentWindow)) {
+          this.options.store.upsertSecondaryWindowState(currentState);
+          continue;
+        }
 
         if (previous && isManualWindowRefresh(previous, currentWindow)) {
           this.enqueueOrApplySentNotification(candidates, {
@@ -351,7 +356,7 @@ const filterUsableUpstreamsForUser = (
 };
 
 const secondaryWindowForUpstream = (upstream: UpstreamRecord): UsageWindow | null =>
-  computeWindowsForUpstream(upstream).find(window => window.label === 'Secondary window') ?? null;
+  selectSecondaryQuotaWindowForUpstream(upstream);
 
 const canUseMissingCodexQuotaState = (upstream: UpstreamRecord): boolean =>
   upstream.provider === 'codex' && !upstream.codex_quota;
@@ -378,6 +383,9 @@ const formatPreviousQuotaEstimate = (
   );
   return formatQuotaEstimateNotification(report);
 };
+
+const didQuotaBucketChange = (previous: SecondaryWindowState, current: UsageWindow): boolean =>
+  previous.quotaBucketKey !== (current.quotaBucketKey ?? null);
 
 const didWindowRefresh = (previous: SecondaryWindowState, current: UsageWindow): boolean => {
   const stored = windowFromState(previous);
@@ -501,6 +509,8 @@ const elapsedWindowRefresh = (knownWindow: UsageWindow, now: Date): WindowRefres
       startHour: hourString(previousStart),
       endHour: hourString(previousEnd),
       ...(elapsedCompletedWindows === 0 && knownWindow.upstreamPercent !== undefined ? { upstreamPercent: knownWindow.upstreamPercent } : {}),
+      ...(knownWindow.quotaBucketKey ? { quotaBucketKey: knownWindow.quotaBucketKey } : {}),
+      ...(knownWindow.quotaActiveLimit ? { quotaActiveLimit: knownWindow.quotaActiveLimit } : {}),
     },
     currentWindow: {
       label: knownWindow.label,
@@ -508,6 +518,8 @@ const elapsedWindowRefresh = (knownWindow: UsageWindow, now: Date): WindowRefres
       endAt: currentEnd.toISOString(),
       startHour: hourString(previousEnd),
       endHour: hourString(currentEnd),
+      ...(knownWindow.quotaBucketKey ? { quotaBucketKey: knownWindow.quotaBucketKey } : {}),
+      ...(knownWindow.quotaActiveLimit ? { quotaActiveLimit: knownWindow.quotaActiveLimit } : {}),
     },
   };
 };
@@ -569,6 +581,7 @@ const windowFromState = (state: SecondaryWindowState): UsageWindow => {
     endHour: hourString(new Date(state.resetAfterAt)),
   };
   if (state.usedPercent !== null) window.upstreamPercent = state.usedPercent;
+  if (state.quotaBucketKey !== null) window.quotaBucketKey = state.quotaBucketKey;
   return window;
 };
 
@@ -583,4 +596,5 @@ const windowState = (
   windowStartAt: window.startAt,
   resetAfterAt: window.endAt,
   usedPercent,
+  quotaBucketKey: window.quotaBucketKey ?? null,
 });

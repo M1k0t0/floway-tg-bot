@@ -108,6 +108,84 @@ describe('SecondaryWindowNotifier', () => {
     expect(messages[0]!.text).not.toContain('999');
   });
 
+  it('selects the newest secondary-window bucket without notifying on bucket switches', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-22T12:00:00.000Z'));
+    const store = createStore();
+    store.upsert({
+      telegramUserId: '12345',
+      flowayUserId: 7,
+      username: 'alice',
+      flowaySession: 'session-alice',
+    });
+    vi.setSystemTime(new Date('2026-06-23T00:00:00.000Z'));
+
+    let currentUpstream: UpstreamRecord = {
+      ...upstreamWithSecondaryReset('2026-06-22T00:00:00.000Z', 80),
+      codex_quota: {
+        premium: {
+          observed_at: '2026-06-21T00:00:00.000Z',
+          active_limit: 'premium',
+          secondary_window_minutes: 10080,
+          secondary_reset_after_at: '2026-06-22T00:00:00.000Z',
+          secondary_used_percent: 80,
+        },
+        enterprise: {
+          observed_at: '2026-06-21T00:01:00.000Z',
+          active_limit: 'enterprise',
+          secondary_window_minutes: 10080,
+          secondary_reset_after_at: '2026-06-29T00:00:00.000Z',
+          secondary_used_percent: 12,
+        },
+      },
+    };
+    let exportCalls = 0;
+    const messages: Array<{ chatId: string; text: string }> = [];
+    const floway = {
+      listUpstreams: async () => [currentUpstream],
+      listUsers: async () => [],
+      getMe: async () => ({
+        user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
+        viaApiKey: false,
+        apiKey: null,
+      }),
+      exportUsageSnapshot: async () => {
+        exportCalls += 1;
+        return emptySnapshot();
+      },
+    };
+    const bot = {
+      telegram: {
+        sendMessage: async (chatId: string, text: string) => {
+          messages.push({ chatId, text });
+          return {};
+        },
+      },
+    };
+    const notifier = new SecondaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+
+    await notifier.pollOnce();
+
+    expect(messages).toEqual([]);
+    expect(exportCalls).toBe(0);
+    expect(store.getSecondaryWindowState('12345', 'up_a')).toMatchObject({
+      quotaBucketKey: 'enterprise',
+      resetAfterAt: '2026-06-29T00:00:00.000Z',
+      usedPercent: 12,
+    });
+
+    currentUpstream = upstreamWithSecondaryReset('2026-06-22T00:00:00.000Z', 80);
+    await notifier.pollOnce();
+
+    expect(messages).toEqual([]);
+    expect(exportCalls).toBe(0);
+    expect(store.getSecondaryWindowState('12345', 'up_a')).toMatchObject({
+      quotaBucketKey: 'premium',
+      resetAfterAt: '2026-06-22T00:00:00.000Z',
+      usedPercent: 80,
+    });
+  });
+
   it('sends a catch-up notification when state is missing after the current secondary window started', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-20T00:00:00.000Z'));
@@ -255,6 +333,7 @@ describe('SecondaryWindowNotifier', () => {
       upstreamId: 'up_a',
       windowStartAt: '2026-06-22T00:00:00.000Z',
       resetAfterAt: '2026-06-29T00:00:00.000Z',
+      quotaBucketKey: 'premium',
       usedPercent: 18,
     });
 
@@ -325,6 +404,7 @@ describe('SecondaryWindowNotifier', () => {
       upstreamId: 'up_a',
       windowStartAt: '2026-06-22T00:00:00.000Z',
       resetAfterAt: '2026-06-29T00:00:00.000Z',
+      quotaBucketKey: 'premium',
       usedPercent: 18,
     });
 
@@ -393,6 +473,7 @@ describe('SecondaryWindowNotifier', () => {
       upstreamId: 'up_a',
       windowStartAt: '2026-06-22T00:00:00.000Z',
       resetAfterAt: '2026-06-29T00:00:00.000Z',
+      quotaBucketKey: 'premium',
       usedPercent: 18,
     });
     store.upsertSecondaryWindowNotification({
@@ -450,6 +531,7 @@ describe('SecondaryWindowNotifier', () => {
       upstreamId: 'up_a',
       windowStartAt: '2026-06-28T00:51:17.124Z',
       resetAfterAt: '2026-07-05T00:51:17.124Z',
+      quotaBucketKey: 'premium',
       usedPercent: 3,
     });
     store.upsertSecondaryWindowNotification({
@@ -508,6 +590,7 @@ describe('SecondaryWindowNotifier', () => {
       upstreamId: 'up_a',
       windowStartAt: '2026-06-28T00:51:17.124Z',
       resetAfterAt: '2026-07-05T00:51:17.124Z',
+      quotaBucketKey: 'premium',
       usedPercent: 3,
     });
     store.upsertSecondaryWindowNotification({
@@ -566,6 +649,7 @@ describe('SecondaryWindowNotifier', () => {
       upstreamId: 'up_a',
       windowStartAt: '2026-06-28T00:51:18.169Z',
       resetAfterAt: '2026-07-05T00:51:18.169Z',
+      quotaBucketKey: 'premium',
       usedPercent: 5,
     });
     store.upsertSecondaryWindowNotification({
@@ -642,6 +726,7 @@ describe('SecondaryWindowNotifier', () => {
       upstreamId: 'up_a',
       windowStartAt: '2026-06-28T00:51:18.169Z',
       resetAfterAt: '2026-07-05T00:51:18.169Z',
+      quotaBucketKey: 'premium',
       usedPercent: 5,
     });
     store.upsertSecondaryWindowNotification({
@@ -709,6 +794,7 @@ describe('SecondaryWindowNotifier', () => {
       upstreamId: 'up_a',
       windowStartAt: '2026-06-28T00:51:17.124Z',
       resetAfterAt: '2026-07-05T00:51:17.124Z',
+      quotaBucketKey: 'premium',
       usedPercent: 3,
     });
     vi.setSystemTime(new Date('2026-06-28T10:25:00.000Z'));
@@ -776,6 +862,7 @@ describe('SecondaryWindowNotifier', () => {
       upstreamId: 'up_a',
       windowStartAt: '2026-06-22T00:00:00.000Z',
       resetAfterAt: '2026-06-29T00:00:00.000Z',
+      quotaBucketKey: 'premium',
       usedPercent: 18,
     });
 
@@ -947,6 +1034,7 @@ describe('SecondaryWindowNotifier', () => {
       upstreamId: 'up_a',
       windowStartAt: '2026-06-15T00:00:00.000Z',
       resetAfterAt: '2026-06-22T00:00:00.000Z',
+      quotaBucketKey: 'premium',
       usedPercent: 80,
     });
 
@@ -1000,6 +1088,7 @@ describe('SecondaryWindowNotifier', () => {
       upstreamId: 'up_b',
       windowStartAt: '2026-06-15T00:00:00.000Z',
       resetAfterAt: '2026-06-22T00:00:00.000Z',
+      quotaBucketKey: 'premium',
       usedPercent: 80,
     });
 
@@ -1149,9 +1238,12 @@ const upstreamWithSecondaryReset = (resetAfterAt: string, usedPercent: number, i
   config: {},
   state: null,
   codex_quota: {
-    observed_at: resetAfterAt,
-    secondary_window_minutes: 10080,
-    secondary_reset_after_at: resetAfterAt,
-    secondary_used_percent: usedPercent,
+    premium: {
+      observed_at: resetAfterAt,
+      active_limit: 'premium',
+      secondary_window_minutes: 10080,
+      secondary_reset_after_at: resetAfterAt,
+      secondary_used_percent: usedPercent,
+    },
   },
 });

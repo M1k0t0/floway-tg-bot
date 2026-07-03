@@ -27,6 +27,7 @@ import { FlowayClient, FlowayHttpError } from './floway-client.js';
 import {
   canShareUpstreamQuota,
   computeWindowsForUpstream,
+  selectSecondaryQuotaWindowForUpstream,
   summarizeUsageLeaderboard,
   summarizeUsageQuotaEstimate,
   summarizeUsageWindow,
@@ -288,15 +289,14 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
         return;
       }
       const upstream = selection.upstream;
-      const secondaryWindow = computeWindowsForUpstream(upstream)
-        .find(window => window.label === 'Secondary window') ?? null;
+      const secondaryWindow = selectSecondaryQuotaWindowForUpstream(upstream);
       const secondaryUsedPercent = secondaryWindow?.upstreamPercent;
       if (!secondaryWindow || secondaryUsedPercent === undefined) {
         await replyLong(ctx, formatQuotaEstimate(upstream, null));
         return;
       }
       if (secondaryUsedPercent < 1) {
-        await replyLong(ctx, formatQuotaEstimateInsufficient(upstream, secondaryWindow.startAt, secondaryWindow.endAt, secondaryUsedPercent));
+        await replyLong(ctx, formatQuotaEstimateInsufficient(upstream, secondaryWindow, secondaryUsedPercent));
         return;
       }
 
@@ -357,8 +357,7 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
       }
 
       const upstream = selection.upstream;
-      const secondaryWindow = computeWindowsForUpstream(upstream)
-        .find(window => window.label === 'Secondary window') ?? null;
+      const secondaryWindow = selectSecondaryQuotaWindowForUpstream(upstream);
       if (!secondaryWindow) {
         await replyLong(ctx, formatQuotaEstimate(upstream, null));
         return;
@@ -584,7 +583,7 @@ export const selectUpstream = (
 const formatSecondaryWindowQuotaEstimate = (
   flowayUserId: number,
   upstream: UpstreamRecord,
-  secondaryWindow: NonNullable<ReturnType<typeof computeWindowsForUpstream>[number]>,
+  secondaryWindow: NonNullable<ReturnType<typeof selectSecondaryQuotaWindowForUpstream>>,
   secondaryUsedPercent: number | undefined,
   exportSnapshot: Parameters<typeof summarizeUsageWindow>[3],
   users: Awaited<ReturnType<FlowayClient['listUsers']>>,

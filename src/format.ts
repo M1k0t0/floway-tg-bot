@@ -8,7 +8,10 @@ import type {
 } from './types.js';
 import {
   BILLING_DIMENSIONS,
+  codexQuotaBucketsForUpstream,
+  selectSecondaryQuotaWindowForUpstream,
   tokenTotal,
+  type CodexQuotaBucket,
   type UsageLeaderboardEntry,
   type UsageLeaderboardReport,
   type UsageQuotaEstimate,
@@ -149,10 +152,7 @@ export const formatUpstreamList = (upstreams: readonly UpstreamRecord[]): string
     .sort((a, b) => a.sort_order - b.sort_order)
     .map(upstream => {
       const status = upstream.enabled ? 'enabled' : 'disabled';
-      const codexQuota = codexQuotaForDisplay(upstream);
-      const quotaLine = codexQuota
-        ? `\n   primary ${bold(formatPercent(codexQuota.primary_used_percent))}, secondary ${bold(formatPercent(codexQuota.secondary_used_percent))}`
-        : '';
+      const quotaLine = codexQuotaListSummary(upstream);
       return `${upstream.sort_order}. ${bold(upstream.name)} ${code(upstream.id)}\n   ${code(upstream.provider)} | ${status}${quotaLine}`;
     });
   return [blockTitle(`Floway upstreams (${upstreams.length})`), ...rows].join('\n\n');
@@ -185,26 +185,22 @@ export const formatUpstreamDetail = (
     label('Models cache', formatModelsCache(upstream)),
   ];
 
-  const codexQuota = codexQuotaForDisplay(upstream);
-  if (codexQuota) {
-    lines.push(
-      '',
-      blockTitle('Codex quota'),
-      label('Observed', code(codexQuota.observed_at)),
-      label('Primary', [
-        bold(formatPercent(codexQuota.primary_used_percent)),
-        codexQuota.primary_window_minutes ? `${formatNumber(codexQuota.primary_window_minutes)} min` : null,
-        codexQuota.primary_reset_after_at ? `resets ${code(codexQuota.primary_reset_after_at)}` : null,
-      ].filter(Boolean).join(' | ')),
-      label('Secondary', [
-        bold(formatPercent(codexQuota.secondary_used_percent)),
-        codexQuota.secondary_window_minutes ? `${formatNumber(codexQuota.secondary_window_minutes)} min` : null,
-        codexQuota.secondary_reset_after_at ? `resets ${code(codexQuota.secondary_reset_after_at)}` : null,
-      ].filter(Boolean).join(' | ')),
-    );
-    if (codexQuota.active_limit) lines.push(label('Active limit', code(codexQuota.active_limit)));
-    if (codexQuota.credits_balance !== undefined) lines.push(label('Credits', code(codexQuota.credits_balance)));
-    if (codexQuota.ratelimited_until) lines.push(label('Rate-limited until', code(codexQuota.ratelimited_until)));
+  const codexQuotaBuckets = codexQuotaBucketsForUpstream(upstream);
+  if (codexQuotaBuckets.length > 0) {
+    lines.push('', blockTitle(codexQuotaBuckets.length === 1 ? 'Codex quota' : `Codex quota buckets (${codexQuotaBuckets.length})`));
+    for (const bucket of codexQuotaBuckets) {
+      lines.push(
+        label('Bucket', quotaBucketLabel(bucket)),
+        label('Observed', code(bucket.snapshot.observed_at)),
+        label('Primary', formatQuotaBucketWindow(bucket.snapshot.primary_used_percent, bucket.snapshot.primary_window_minutes, bucket.snapshot.primary_reset_after_at)),
+        label('Secondary', formatQuotaBucketWindow(bucket.snapshot.secondary_used_percent, bucket.snapshot.secondary_window_minutes, bucket.snapshot.secondary_reset_after_at)),
+      );
+      if (bucket.snapshot.active_limit) lines.push(label('Active limit', code(bucket.snapshot.active_limit)));
+      if (bucket.snapshot.credits_balance !== undefined) lines.push(label('Credits', code(bucket.snapshot.credits_balance)));
+      if (bucket.snapshot.ratelimited_until) lines.push(label('Rate-limited until', code(bucket.snapshot.ratelimited_until)));
+      lines.push('');
+    }
+    if (lines.at(-1) === '') lines.pop();
   }
 
   if (copilotQuota) {
@@ -257,10 +253,14 @@ export const formatUsageReports = (upstream: UpstreamRecord, reports: readonly U
     ].join('\n');
   }
   const lines = [`${blockTitle('Usage')} ${bold(upstream.name)} ${code(upstream.id)}`];
+  const bucketCount = new Set(reports.map(report => report.window.quotaBucketKey).filter(Boolean)).size;
+  if (bucketCount > 1) {
+    lines.push('Codex exposes multiple active-limit quota buckets. Usage totals are upstream-wide, not separated by active limit.');
+  }
   for (const report of reports) {
     lines.push(
       '',
-      blockTitle(report.window.label),
+      blockTitle(usageWindowLabel(report.window)),
       label('Window', `${code(report.window.startAt)} -> ${code(report.window.endAt)}`),
       label('Floway upstream used', bold(formatPercent(report.window.upstreamPercent))),
       label('Your share by tokens', bold(formatPercent(report.userTokenSharePercent))),
@@ -284,6 +284,7 @@ export const formatSecondaryWindowNotification = (
   const lines = [
     blockTitle('Secondary window refreshed'),
     `${bold(upstream.name)} ${code(upstream.id)}`,
+    label('Active limit', usageWindowBucketLabel(report.window)),
     '',
     label('Previous window', `${code(report.window.startAt)} -> ${code(report.window.endAt)}`),
   ];
@@ -311,6 +312,7 @@ export const formatQuotaEstimate = (upstream: UpstreamRecord, report: UsageQuota
     blockTitle('Quota estimate'),
     '',
     bold(upstream.name),
+    label('Active limit', usageWindowBucketLabel(report.window)),
     `Reset in ${formatDurationUntil(report.window.endAt)}`,
     `${bold('Upstream secondary used')}:`,
     formatProgressPercent(report.upstreamUsedPercent),
@@ -325,6 +327,7 @@ export const formatQuotaEstimateNotification = (report: UsageQuotaEstimate | nul
   if (!report) return 'Secondary quota estimate unavailable.';
 
   return [
+    label('Active limit', usageWindowBucketLabel(report.window)),
     `${bold('Upstream secondary used')}:`,
     formatProgressPercent(report.upstreamUsedPercent),
     `${bold('Estimated your used')}:`,
@@ -342,6 +345,7 @@ export const formatQuotaEstimateVerbose = (upstream: UpstreamRecord, report: Usa
 
   return [
     `${blockTitle('Quota estimate')} ${bold(upstream.name)} ${code(upstream.id)}`,
+    label('Active limit', usageWindowBucketLabel(report.window)),
     label('Window', `${code(report.window.startAt)} -> ${code(report.window.endAt)}`),
     label('Upstream secondary used', formatProgressPercent(report.upstreamUsedPercent)),
     label('Assumed users', `${formatNumber(report.nonAdminUserCount)} non-admin Floway users`),
@@ -357,12 +361,13 @@ export const formatQuotaEstimateVerbose = (upstream: UpstreamRecord, report: Usa
   ].join('\n');
 };
 
-export const formatQuotaEstimateInsufficient = (upstream: UpstreamRecord, windowStartAt: string, windowEndAt: string, upstreamUsedPercent: number): string =>
+export const formatQuotaEstimateInsufficient = (upstream: UpstreamRecord, window: UsageWindowReport['window'], upstreamUsedPercent: number): string =>
   [
     blockTitle('Quota estimate'),
     '',
     bold(upstream.name),
-    `Reset in ${formatDurationUntil(windowEndAt)}`,
+    label('Active limit', usageWindowBucketLabel(window)),
+    `Reset in ${formatDurationUntil(window.endAt)}`,
     `${bold('Upstream secondary used')}:`,
     formatProgressPercent(upstreamUsedPercent),
     '',
@@ -434,8 +439,48 @@ const formatLeaderboardShare = (
 const sharePercent = (value: number, total: number): number | null =>
   total > 0 ? (value / total) * 100 : null;
 
-const codexQuotaForDisplay = (upstream: UpstreamRecord): UpstreamRecord['codex_quota'] =>
-  upstream.provider === 'codex' ? upstream.codex_quota ?? null : null;
+const codexQuotaListSummary = (upstream: UpstreamRecord): string => {
+  const buckets = codexQuotaBucketsForUpstream(upstream);
+  if (buckets.length === 0) return '';
+  if (buckets.length === 1) {
+    const bucket = buckets[0]!;
+    return `\n   quota ${quotaBucketLabel(bucket)}: primary ${bold(formatPercent(bucket.snapshot.primary_used_percent))}, secondary ${bold(formatPercent(bucket.snapshot.secondary_used_percent))}`;
+  }
+  const latest = selectSecondaryQuotaWindowForUpstream(upstream);
+  const primaryMax = maxPercent(buckets.map(bucket => bucket.snapshot.primary_used_percent));
+  const secondaryMax = maxPercent(buckets.map(bucket => bucket.snapshot.secondary_used_percent));
+  const latestLabel = latest ? `, latest ${usageWindowBucketLabel(latest)}` : '';
+  return `\n   quotas ${formatNumber(buckets.length)} buckets, max primary ${bold(formatPercent(primaryMax))}, max secondary ${bold(formatPercent(secondaryMax))}${latestLabel}`;
+};
+
+const maxPercent = (values: Array<number | undefined>): number | null => {
+  const finite = values.filter((value): value is number => value !== undefined && Number.isFinite(value));
+  return finite.length ? Math.max(...finite) : null;
+};
+
+const quotaBucketLabel = (bucket: CodexQuotaBucket): string =>
+  bucket.snapshot.active_limit && bucket.snapshot.active_limit !== bucket.key
+    ? `${code(bucket.key)} (${code(bucket.snapshot.active_limit)})`
+    : code(bucket.key);
+
+const usageWindowLabel = (window: UsageWindowReport['window']): string => {
+  const bucket = usageWindowBucketText(window);
+  return bucket ? `${window.label} — ${bucket}` : window.label;
+};
+
+const usageWindowBucketLabel = (window: UsageWindowReport['window']): string => {
+  const bucket = usageWindowBucketText(window);
+  return bucket ? code(bucket) : 'n/a';
+};
+
+const usageWindowBucketText = (window: UsageWindowReport['window']): string | null =>
+  window.quotaActiveLimit ?? window.quotaBucketKey ?? null;
+
+const formatQuotaBucketWindow = (usedPercent?: number, windowMinutes?: number, resetAt?: string): string => [
+  bold(formatPercent(usedPercent)),
+  windowMinutes ? `${formatNumber(windowMinutes)} min` : null,
+  resetAt ? `resets ${code(resetAt)}` : null,
+].filter(Boolean).join(' | ');
 
 const formatDurationUntil = (value: string, now = new Date()): string => {
   const end = new Date(value);

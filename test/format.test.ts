@@ -182,6 +182,7 @@ describe('formatters', () => {
         endAt: '2026-06-22T00:00:00.000Z',
         startHour: '2026-06-15T00',
         endHour: '2026-06-22T00',
+        quotaActiveLimit: 'premium',
       },
       upstreamUsedPercent: 18,
       user: { requests: 1, tokens: { input: 100 }, cost: 0.0001 },
@@ -198,6 +199,7 @@ describe('formatters', () => {
     expect(text).toContain('<b>Upstream secondary used</b>:\n[|||            ] <b>18.0%</b>');
     expect(text).toContain('<b>Estimated your used</b>:');
     expect(text).toContain('(Assumed 4 users)');
+    expect(text).not.toContain('<b>Active limit</b>');
     expect(text).not.toContain('<b>Quota estimate</b>');
     expect(text).not.toContain('Reset in ');
     expect(text).not.toContain('Estimate only');

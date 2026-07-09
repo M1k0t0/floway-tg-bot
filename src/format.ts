@@ -322,7 +322,6 @@ export const formatQuotaEstimateNotification = (report: UsageQuotaEstimate | nul
   if (!report) return 'Secondary quota estimate unavailable.';
 
   return [
-    label('Active limit', usageWindowBucketLabel(report.window)),
     `${bold('Upstream secondary used')}:`,
     formatProgressPercent(report.upstreamUsedPercent),
     `${bold('Estimated your used')}:`,

@@ -385,7 +385,8 @@ const formatPreviousQuotaEstimate = (
 };
 
 const didQuotaBucketChange = (previous: PrimaryWindowState, current: UsageWindow): boolean =>
-  previous.quotaBucketKey !== (current.quotaBucketKey ?? null);
+  previous.quotaBucketKey !== null
+  && previous.quotaBucketKey !== (current.quotaBucketKey ?? null);
 
 const didWindowRefresh = (previous: PrimaryWindowState, current: UsageWindow): boolean => {
   const stored = windowFromState(previous);

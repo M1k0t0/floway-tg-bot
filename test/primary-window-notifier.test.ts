@@ -108,6 +108,60 @@ describe('PrimaryWindowNotifier', () => {
     expect(messages[0]!.text).not.toContain('999');
   });
 
+  it('notifies after an older stored state without a bucket key advances', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-22T00:01:00.000Z'));
+    const store = createStore();
+    store.upsert({
+      telegramUserId: '12345',
+      flowayUserId: 7,
+      username: 'alice',
+      flowaySession: 'session-alice',
+    });
+    store.upsertPrimaryWindowState({
+      telegramUserId: '12345',
+      upstreamId: 'up_a',
+      windowStartAt: '2026-06-08T00:00:00.000Z',
+      resetAfterAt: '2026-06-15T00:00:00.000Z',
+      usedPercent: 80,
+      quotaBucketKey: null,
+    });
+
+    const messages: string[] = [];
+    const notifier = new PrimaryWindowNotifier({
+      store,
+      floway: {
+        listUpstreams: async () => [upstreamWithPrimaryReset('2026-06-22T00:00:00.000Z', 12)],
+        listUsers: async () => [],
+        getMe: async () => ({
+          user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
+          viaApiKey: false,
+          apiKey: null,
+        }),
+        exportUsageSnapshot: async () => emptySnapshot(),
+      },
+      bot: {
+        telegram: {
+          sendMessage: async (_chatId: string, text: string) => {
+            messages.push(text);
+            return {};
+          },
+        },
+      },
+      intervalSeconds: 60,
+    });
+
+    await notifier.pollOnce();
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain('<b>Primary window refreshed</b>');
+    expect(store.getPrimaryWindowState('12345', 'up_a')).toMatchObject({
+      quotaBucketKey: 'premium',
+      windowStartAt: '2026-06-15T00:00:00.000Z',
+      resetAfterAt: '2026-06-22T00:00:00.000Z',
+    });
+  });
+
   it('uses only the premium primary-window bucket when other buckets exist', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-22T12:00:00.000Z'));

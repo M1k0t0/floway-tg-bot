@@ -1,14 +1,14 @@
-import { BindingStore, type SecondaryWindowNotification, type SecondaryWindowState } from './db.js';
+import { BindingStore, type PrimaryWindowNotification, type PrimaryWindowState } from './db.js';
 import { FlowayHttpError } from './floway-client.js';
 import {
   formatQuotaEstimateInsufficientNotification,
   formatQuotaEstimateNotification,
-  formatSecondaryWindowNotification,
+  formatPrimaryWindowNotification,
   splitMessage,
 } from './format.js';
 import {
   canShareUpstreamQuota,
-  selectSecondaryQuotaWindowForUpstream,
+  selectPrimaryQuotaWindowForUpstream,
   hourString,
   summarizeUsageQuotaEstimate,
   summarizeUsageWindow,
@@ -23,7 +23,7 @@ import type {
   UpstreamRecord,
 } from './types.js';
 
-interface SecondaryWindowFlowayClient {
+interface PrimaryWindowFlowayClient {
   listUpstreams(): Promise<UpstreamRecord[]>;
   listUsers(): Promise<FlowayAdminUser[]>;
   getMe(session: string): Promise<AuthMeResponse>;
@@ -36,9 +36,9 @@ interface TelegramSender {
   };
 }
 
-interface SecondaryWindowNotifierOptions {
+interface PrimaryWindowNotifierOptions {
   store: BindingStore;
-  floway: SecondaryWindowFlowayClient;
+  floway: PrimaryWindowFlowayClient;
   bot: TelegramSender;
   intervalSeconds: number;
 }
@@ -48,7 +48,7 @@ interface NotificationCandidate {
   upstream: UpstreamRecord;
   previousWindow: UsageWindow;
   currentWindow: UsageWindow;
-  currentState: Omit<SecondaryWindowState, 'updatedAt'>;
+  currentState: Omit<PrimaryWindowState, 'updatedAt'>;
   note?: string;
 }
 
@@ -59,11 +59,11 @@ interface WindowRefresh {
 
 const WINDOW_BOUNDARY_DEBOUNCE_MS = 5 * 60 * 60 * 1000;
 
-export class SecondaryWindowNotifier {
+export class PrimaryWindowNotifier {
   private timer: ReturnType<typeof setInterval> | null = null;
   private activePoll: Promise<void> | null = null;
 
-  constructor(private readonly options: SecondaryWindowNotifierOptions) {}
+  constructor(private readonly options: PrimaryWindowNotifierOptions) {}
 
   start(): void {
     if (this.timer) return;
@@ -93,7 +93,7 @@ export class SecondaryWindowNotifier {
     try {
       await this.poll();
     } catch (error) {
-      console.error('Secondary window notifier failed:', error);
+      console.error('Primary window notifier failed:', error);
     } finally {
       this.activePoll = null;
     }
@@ -109,14 +109,14 @@ export class SecondaryWindowNotifier {
       if (!bound) continue;
 
       const allowedUpstreams = filterUsableUpstreamsForUser(upstreams, bound.user);
-      this.options.store.deleteSecondaryWindowStatesExcept(
+      this.options.store.deletePrimaryWindowStatesExcept(
         bound.binding.telegramUserId,
         allowedUpstreams.map(upstream => upstream.id),
       );
 
       for (const upstream of allowedUpstreams) {
-        const previous = this.options.store.getSecondaryWindowState(bound.binding.telegramUserId, upstream.id);
-        const currentWindow = secondaryWindowForUpstream(upstream);
+        const previous = this.options.store.getPrimaryWindowState(bound.binding.telegramUserId, upstream.id);
+        const currentWindow = primaryWindowForUpstream(upstream);
         if (currentWindow && isWindowFromFuture(currentWindow, now)) {
           const elapsed = previous ? elapsedWindowRefreshFromState(previous, now) : null;
           if (elapsed) {
@@ -146,7 +146,7 @@ export class SecondaryWindowNotifier {
         }
         if (!currentWindow) {
           if (!canUseMissingCodexQuotaState(upstream)) {
-            this.options.store.deleteSecondaryWindowState(bound.binding.telegramUserId, upstream.id);
+            this.options.store.deletePrimaryWindowState(bound.binding.telegramUserId, upstream.id);
             continue;
           }
           const elapsed = previous ? elapsedWindowRefreshFromState(previous, now) : null;
@@ -179,7 +179,7 @@ export class SecondaryWindowNotifier {
         const currentState = windowState(bound.binding, upstream.id, currentWindow, currentWindow.upstreamPercent ?? null);
 
         if (previous && didQuotaBucketChange(previous, currentWindow)) {
-          this.options.store.upsertSecondaryWindowState(currentState);
+          this.options.store.upsertPrimaryWindowState(currentState);
           continue;
         }
 
@@ -190,7 +190,7 @@ export class SecondaryWindowNotifier {
             previousWindow: manualRefreshWindowToReport(previous, currentWindow),
             currentWindow,
             currentState,
-            note: 'Upstream refreshed this secondary window early; this is not a natural cycle.',
+            note: 'Upstream refreshed this primary window early; this is not a natural cycle.',
           });
           continue;
         }
@@ -231,7 +231,7 @@ export class SecondaryWindowNotifier {
                   : windowState(bound.binding, upstream.id, storedWindow, previous.usedPercent),
               });
             } else if (isWindowAtLeast(previous, currentWindow)) {
-              this.options.store.upsertSecondaryWindowState(currentState);
+              this.options.store.upsertPrimaryWindowState(currentState);
             }
           }
         } else {
@@ -247,7 +247,7 @@ export class SecondaryWindowNotifier {
                 currentState: elapsedState,
               });
             } else {
-              this.options.store.upsertSecondaryWindowState(elapsedState);
+              this.options.store.upsertPrimaryWindowState(elapsedState);
             }
           } else if (shouldCatchUpMissingState(bound.binding, currentWindow, now)) {
             const previousWindow = completedWindowBefore(currentWindow);
@@ -260,10 +260,10 @@ export class SecondaryWindowNotifier {
                 currentState,
               });
             } else {
-              this.options.store.upsertSecondaryWindowState(currentState);
+              this.options.store.upsertPrimaryWindowState(currentState);
             }
           } else {
-            this.options.store.upsertSecondaryWindowState(currentState);
+            this.options.store.upsertPrimaryWindowState(currentState);
           }
         }
       }
@@ -277,15 +277,15 @@ export class SecondaryWindowNotifier {
     for (const candidate of candidates) {
       try {
         await this.sendNotification(candidate, snapshot, users);
-        this.options.store.upsertSecondaryWindowNotification({
+        this.options.store.upsertPrimaryWindowNotification({
           telegramUserId: candidate.binding.telegramUserId,
           upstreamId: candidate.upstream.id,
           windowStartAt: candidate.previousWindow.startAt,
           resetAfterAt: candidate.previousWindow.endAt,
         });
-        this.options.store.upsertSecondaryWindowState(candidate.currentState);
+        this.options.store.upsertPrimaryWindowState(candidate.currentState);
       } catch (error) {
-        console.error(`Failed to send secondary window notification to Telegram user ${candidate.binding.telegramUserId}:`, error);
+        console.error(`Failed to send primary window notification to Telegram user ${candidate.binding.telegramUserId}:`, error);
       }
     }
   }
@@ -325,14 +325,14 @@ export class SecondaryWindowNotifier {
       snapshot,
     );
     const quotaEstimate = formatPreviousQuotaEstimate(candidate, snapshot, users);
-    const text = formatSecondaryWindowNotification(candidate.upstream, report, quotaEstimate, candidate.note);
+    const text = formatPrimaryWindowNotification(candidate.upstream, report, quotaEstimate, candidate.note);
     for (const chunk of splitMessage(text)) {
       await this.options.bot.telegram.sendMessage(candidate.binding.telegramUserId, chunk, { parse_mode: 'HTML' });
     }
   }
 
   private enqueueOrApplySentNotification(candidates: NotificationCandidate[], candidate: NotificationCandidate): void {
-    const sent = this.options.store.getSecondaryWindowNotificationEndingByHour(
+    const sent = this.options.store.getPrimaryWindowNotificationEndingByHour(
       candidate.binding.telegramUserId,
       candidate.upstream.id,
       candidate.previousWindow.endHour,
@@ -341,7 +341,7 @@ export class SecondaryWindowNotifier {
       candidates.push(candidate);
       return;
     }
-    this.options.store.upsertSecondaryWindowState(candidate.currentState);
+    this.options.store.upsertPrimaryWindowState(candidate.currentState);
   }
 }
 
@@ -355,8 +355,8 @@ const filterUsableUpstreamsForUser = (
   return allowed.filter(upstream => upstream.enabled);
 };
 
-const secondaryWindowForUpstream = (upstream: UpstreamRecord): UsageWindow | null =>
-  selectSecondaryQuotaWindowForUpstream(upstream);
+const primaryWindowForUpstream = (upstream: UpstreamRecord): UsageWindow | null =>
+  selectPrimaryQuotaWindowForUpstream(upstream);
 
 const canUseMissingCodexQuotaState = (upstream: UpstreamRecord): boolean =>
   upstream.kind === 'codex' && !upstream.codex_quota;
@@ -384,21 +384,21 @@ const formatPreviousQuotaEstimate = (
   return formatQuotaEstimateNotification(report);
 };
 
-const didQuotaBucketChange = (previous: SecondaryWindowState, current: UsageWindow): boolean =>
+const didQuotaBucketChange = (previous: PrimaryWindowState, current: UsageWindow): boolean =>
   previous.quotaBucketKey !== (current.quotaBucketKey ?? null);
 
-const didWindowRefresh = (previous: SecondaryWindowState, current: UsageWindow): boolean => {
+const didWindowRefresh = (previous: PrimaryWindowState, current: UsageWindow): boolean => {
   const stored = windowFromState(previous);
   if (isSameWindowPeriod(stored, current)) return false;
   return isBoundaryAfterOutsideDebounce(current.endAt, stored.endAt);
 };
 
-const isWindowAtLeast = (previous: SecondaryWindowState, current: UsageWindow): boolean => {
+const isWindowAtLeast = (previous: PrimaryWindowState, current: UsageWindow): boolean => {
   const stored = windowFromState(previous);
   return isSameWindowPeriod(stored, current) || isBoundaryAtOrAfter(current.endAt, stored.endAt);
 };
 
-const isManualWindowRefresh = (previous: SecondaryWindowState, current: UsageWindow): boolean => {
+const isManualWindowRefresh = (previous: PrimaryWindowState, current: UsageWindow): boolean => {
   const stored = windowFromState(previous);
   if (isSameWindowPeriod(stored, current)) return false;
   return isBoundaryAfterOutsideDebounce(current.startAt, stored.startAt)
@@ -447,14 +447,14 @@ const isWindowFromFuture = (window: UsageWindow, now: Date): boolean => {
 };
 
 const wasNotificationSentAfterWindowEnded = (
-  notification: Pick<SecondaryWindowNotification, 'sentAt'>,
+  notification: Pick<PrimaryWindowNotification, 'sentAt'>,
   window: UsageWindow,
 ): boolean => {
   const sentHour = hourStringOrNull(new Date(notification.sentAt));
   return sentHour !== null && isHourAtOrAfter(sentHour, window.endHour);
 };
 
-const windowToReport = (previous: SecondaryWindowState, current: UsageWindow): UsageWindow => {
+const windowToReport = (previous: PrimaryWindowState, current: UsageWindow): UsageWindow => {
   const previousWindow = windowFromState(previous);
   const completed = completedWindowBefore(current);
   if (!completed) return previousWindow;
@@ -466,7 +466,7 @@ const windowToReport = (previous: SecondaryWindowState, current: UsageWindow): U
   return previousWindow;
 };
 
-const manualRefreshWindowToReport = (previous: SecondaryWindowState, current: UsageWindow): UsageWindow => {
+const manualRefreshWindowToReport = (previous: PrimaryWindowState, current: UsageWindow): UsageWindow => {
   const window = windowFromState(previous);
   return {
     ...window,
@@ -475,7 +475,7 @@ const manualRefreshWindowToReport = (previous: SecondaryWindowState, current: Us
   };
 };
 
-const elapsedWindowRefreshFromState = (previous: SecondaryWindowState, now = new Date()): WindowRefresh | null =>
+const elapsedWindowRefreshFromState = (previous: PrimaryWindowState, now = new Date()): WindowRefresh | null =>
   elapsedWindowRefresh(windowFromState(previous), now);
 
 const elapsedWindowRefresh = (knownWindow: UsageWindow, now: Date): WindowRefresh | null => {
@@ -564,7 +564,7 @@ const completedWindowBefore = (current: UsageWindow): UsageWindow | null => {
 
   const previousStart = new Date(currentStart.getTime() - durationMs);
   return {
-    label: 'Secondary window',
+    label: 'Primary window',
     startAt: previousStart.toISOString(),
     endAt: currentStart.toISOString(),
     startHour: hourString(previousStart),
@@ -572,9 +572,9 @@ const completedWindowBefore = (current: UsageWindow): UsageWindow | null => {
   };
 };
 
-const windowFromState = (state: SecondaryWindowState): UsageWindow => {
+const windowFromState = (state: PrimaryWindowState): UsageWindow => {
   const window: UsageWindow = {
-    label: 'Secondary window',
+    label: 'Primary window',
     startAt: state.windowStartAt,
     endAt: state.resetAfterAt,
     startHour: hourString(new Date(state.windowStartAt)),
@@ -590,7 +590,7 @@ const windowState = (
   upstreamId: string,
   window: UsageWindow,
   usedPercent: number | null,
-): Omit<SecondaryWindowState, 'updatedAt'> => ({
+): Omit<PrimaryWindowState, 'updatedAt'> => ({
   telegramUserId: binding.telegramUserId,
   upstreamId,
   windowStartAt: window.startAt,

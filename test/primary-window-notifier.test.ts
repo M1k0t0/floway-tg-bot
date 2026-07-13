@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BindingStore } from '../src/db.js';
-import { SecondaryWindowNotifier } from '../src/secondary-window-notifier.js';
+import { PrimaryWindowNotifier } from '../src/primary-window-notifier.js';
 import type { SanitizedExportSnapshot, UpstreamRecord } from '../src/types.js';
 
 const tempDirs: string[] = [];
@@ -18,8 +18,8 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('SecondaryWindowNotifier', () => {
-  it('seeds current secondary windows, then notifies once after the reset advances', async () => {
+describe('PrimaryWindowNotifier', () => {
+  it('seeds current primary windows, then notifies once after the reset advances', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-21T00:00:00.000Z'));
     const store = createStore();
@@ -30,7 +30,7 @@ describe('SecondaryWindowNotifier', () => {
       flowaySession: 'session-alice',
     });
 
-    let currentUpstream = upstreamWithSecondaryReset('2026-06-22T00:00:00.000Z', 80);
+    let currentUpstream = upstreamWithPrimaryReset('2026-06-22T00:00:00.000Z', 80);
     let exportCalls = 0;
     const messages: Array<{ chatId: string; text: string }> = [];
     const snapshot: SanitizedExportSnapshot = {
@@ -75,7 +75,7 @@ describe('SecondaryWindowNotifier', () => {
         },
       },
     };
-    const notifier = new SecondaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
 
     await notifier.pollOnce();
 
@@ -83,18 +83,18 @@ describe('SecondaryWindowNotifier', () => {
     expect(messages).toEqual([]);
 
     vi.setSystemTime(new Date('2026-06-22T00:01:00.000Z'));
-    currentUpstream = upstreamWithSecondaryReset('2026-06-29T00:00:00.000Z', 12);
+    currentUpstream = upstreamWithPrimaryReset('2026-06-29T00:00:00.000Z', 12);
     await notifier.pollOnce();
     await notifier.pollOnce();
 
     expect(exportCalls).toBe(1);
     expect(messages).toHaveLength(1);
     expect(messages[0]).toMatchObject({ chatId: '12345' });
-    expect(messages[0]!.text).toContain('<b>Secondary window refreshed</b>');
+    expect(messages[0]!.text).toContain('<b>Primary window refreshed</b>');
     expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-15T00:00:00.000Z</code> -> <code>2026-06-22T00:00:00.000Z</code>');
     expect(messages[0]!.text).toContain('<b>Your upstream tokens</b>: <b>100</b>');
     expect(messages[0]!.text).toContain('<b>Upstream cost</b>: <b>$0.000100</b> / $0.000100');
-    expect(messages[0]!.text).toContain('<b>Upstream secondary used</b>:\n[||||||||||||   ] <b>80.0%</b>');
+    expect(messages[0]!.text).toContain('<b>Upstream primary used</b>:\n[||||||||||||   ] <b>80.0%</b>');
     expect(messages[0]!.text).toContain('<b>Estimated your used</b>:');
     expect(messages[0]!.text).toContain('(Assumed 2 users)');
     expect(messages[0]!.text).not.toContain('<b>12.0%</b>');
@@ -108,7 +108,7 @@ describe('SecondaryWindowNotifier', () => {
     expect(messages[0]!.text).not.toContain('999');
   });
 
-  it('uses only the premium secondary-window bucket when other buckets exist', async () => {
+  it('uses only the premium primary-window bucket when other buckets exist', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-22T12:00:00.000Z'));
     const store = createStore();
@@ -121,21 +121,21 @@ describe('SecondaryWindowNotifier', () => {
     vi.setSystemTime(new Date('2026-06-23T00:00:00.000Z'));
 
     let currentUpstream: UpstreamRecord = {
-      ...upstreamWithSecondaryReset('2026-06-22T00:00:00.000Z', 80),
+      ...upstreamWithPrimaryReset('2026-06-22T00:00:00.000Z', 80),
       codex_quota: {
         premium: {
           observed_at: '2026-06-21T00:00:00.000Z',
           active_limit: 'premium',
-          secondary_window_minutes: 10080,
-          secondary_reset_after_at: '2026-06-22T00:00:00.000Z',
-          secondary_used_percent: 80,
+          primary_window_minutes: 10080,
+          primary_reset_after_at: '2026-06-22T00:00:00.000Z',
+          primary_used_percent: 80,
         },
         enterprise: {
           observed_at: '2026-06-21T00:01:00.000Z',
           active_limit: 'enterprise',
-          secondary_window_minutes: 10080,
-          secondary_reset_after_at: '2026-06-29T00:00:00.000Z',
-          secondary_used_percent: 12,
+          primary_window_minutes: 10080,
+          primary_reset_after_at: '2026-06-29T00:00:00.000Z',
+          primary_used_percent: 12,
         },
       },
     };
@@ -162,13 +162,13 @@ describe('SecondaryWindowNotifier', () => {
         },
       },
     };
-    const notifier = new SecondaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
 
     await notifier.pollOnce();
 
     expect(messages).toEqual([]);
     expect(exportCalls).toBe(0);
-    expect(store.getSecondaryWindowState('12345', 'up_a')).toMatchObject({
+    expect(store.getPrimaryWindowState('12345', 'up_a')).toMatchObject({
       quotaBucketKey: 'premium',
       windowStartAt: '2026-06-22T00:00:00.000Z',
       resetAfterAt: '2026-06-29T00:00:00.000Z',
@@ -185,10 +185,10 @@ describe('SecondaryWindowNotifier', () => {
 
     expect(messages).toEqual([]);
     expect(exportCalls).toBe(0);
-    expect(store.getSecondaryWindowState('12345', 'up_a')).toBeNull();
+    expect(store.getPrimaryWindowState('12345', 'up_a')).toBeNull();
   });
 
-  it('sends a catch-up notification when state is missing after the current secondary window started', async () => {
+  it('sends a catch-up notification when state is missing after the current primary window started', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-20T00:00:00.000Z'));
     const store = createStore();
@@ -200,7 +200,7 @@ describe('SecondaryWindowNotifier', () => {
     });
     vi.setSystemTime(new Date('2026-06-23T00:00:00.000Z'));
 
-    const currentUpstream = upstreamWithSecondaryReset('2026-06-29T00:00:00.000Z', 18);
+    const currentUpstream = upstreamWithPrimaryReset('2026-06-29T00:00:00.000Z', 18);
     let exportCalls = 0;
     const messages: Array<{ chatId: string; text: string }> = [];
     const snapshot: SanitizedExportSnapshot = {
@@ -244,7 +244,7 @@ describe('SecondaryWindowNotifier', () => {
         },
       },
     };
-    const notifier = new SecondaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
 
     await notifier.pollOnce();
     await notifier.pollOnce();
@@ -255,9 +255,9 @@ describe('SecondaryWindowNotifier', () => {
     expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-15T00:00:00.000Z</code> -> <code>2026-06-22T00:00:00.000Z</code>');
     expect(messages[0]!.text).toContain('<b>Your upstream tokens</b>: <b>200</b>');
     expect(messages[0]!.text).toContain('<b>All upstream tokens</b>: <b>500</b>');
-    expect(messages[0]!.text).toContain('Secondary quota estimate unavailable.');
+    expect(messages[0]!.text).toContain('Primary quota estimate unavailable.');
     expect(messages[0]!.text).not.toContain('<b>18.0%</b>');
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
+    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
   });
 
   it('sends a catch-up notification from stale Floway quota when state is missing after reset', async () => {
@@ -272,7 +272,7 @@ describe('SecondaryWindowNotifier', () => {
     });
     vi.setSystemTime(new Date('2026-06-23T00:00:00.000Z'));
 
-    const currentUpstream = upstreamWithSecondaryReset('2026-06-22T00:00:00.000Z', 80);
+    const currentUpstream = upstreamWithPrimaryReset('2026-06-22T00:00:00.000Z', 80);
     let exportCalls = 0;
     const messages: Array<{ chatId: string; text: string }> = [];
     const snapshot: SanitizedExportSnapshot = {
@@ -306,7 +306,7 @@ describe('SecondaryWindowNotifier', () => {
         },
       },
     };
-    const notifier = new SecondaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
 
     await notifier.pollOnce();
     await notifier.pollOnce();
@@ -314,9 +314,9 @@ describe('SecondaryWindowNotifier', () => {
     expect(exportCalls).toBe(1);
     expect(messages).toHaveLength(1);
     expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-15T00:00:00.000Z</code> -> <code>2026-06-22T00:00:00.000Z</code>');
-    expect(messages[0]!.text).toContain('<b>Upstream secondary used</b>:\n[||||||||||||   ] <b>80.0%</b>');
-    expect(messages[0]!.text).not.toContain('Secondary quota estimate unavailable.');
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
+    expect(messages[0]!.text).toContain('<b>Upstream primary used</b>:\n[||||||||||||   ] <b>80.0%</b>');
+    expect(messages[0]!.text).not.toContain('Primary quota estimate unavailable.');
+    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
   });
 
   it('backfills the previous window when old code already advanced state without recording a notification', async () => {
@@ -330,7 +330,7 @@ describe('SecondaryWindowNotifier', () => {
       flowaySession: 'session-alice',
     });
     vi.setSystemTime(new Date('2026-06-23T00:00:00.000Z'));
-    store.upsertSecondaryWindowState({
+    store.upsertPrimaryWindowState({
       telegramUserId: '12345',
       upstreamId: 'up_a',
       windowStartAt: '2026-06-22T00:00:00.000Z',
@@ -339,7 +339,7 @@ describe('SecondaryWindowNotifier', () => {
       usedPercent: 18,
     });
 
-    const currentUpstream = upstreamWithSecondaryReset('2026-06-29T00:00:00.000Z', 42);
+    const currentUpstream = upstreamWithPrimaryReset('2026-06-29T00:00:00.000Z', 42);
     let exportCalls = 0;
     const messages: Array<{ chatId: string; text: string }> = [];
     const snapshot: SanitizedExportSnapshot = {
@@ -373,7 +373,7 @@ describe('SecondaryWindowNotifier', () => {
         },
       },
     };
-    const notifier = new SecondaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
 
     await notifier.pollOnce();
     await notifier.pollOnce();
@@ -382,12 +382,12 @@ describe('SecondaryWindowNotifier', () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-15T00:00:00.000Z</code> -> <code>2026-06-22T00:00:00.000Z</code>');
     expect(messages[0]!.text).toContain('<b>Your upstream tokens</b>: <b>200</b>');
-    expect(messages[0]!.text).toContain('Secondary quota estimate unavailable.');
+    expect(messages[0]!.text).toContain('Primary quota estimate unavailable.');
     expect(messages[0]!.text).not.toContain('<b>18.0%</b>');
     expect(messages[0]!.text).not.toContain('<b>42.0%</b>');
-    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-15T00:00:00.000Z', '2026-06-22T00:00:00.000Z')).not.toBeNull();
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.usedPercent).toBe(42);
+    expect(store.getPrimaryWindowNotification('12345', 'up_a', '2026-06-15T00:00:00.000Z', '2026-06-22T00:00:00.000Z')).not.toBeNull();
+    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
+    expect(store.getPrimaryWindowState('12345', 'up_a')?.usedPercent).toBe(42);
   });
 
   it('backfills the previous window when old code advanced state and Floway quota is missing', async () => {
@@ -401,7 +401,7 @@ describe('SecondaryWindowNotifier', () => {
       flowaySession: 'session-alice',
     });
     vi.setSystemTime(new Date('2026-06-23T00:00:00.000Z'));
-    store.upsertSecondaryWindowState({
+    store.upsertPrimaryWindowState({
       telegramUserId: '12345',
       upstreamId: 'up_a',
       windowStartAt: '2026-06-22T00:00:00.000Z',
@@ -410,7 +410,7 @@ describe('SecondaryWindowNotifier', () => {
       usedPercent: 18,
     });
 
-    const currentUpstream = { ...upstreamWithSecondaryReset('2026-06-29T00:00:00.000Z', 18), codex_quota: null };
+    const currentUpstream = { ...upstreamWithPrimaryReset('2026-06-29T00:00:00.000Z', 18), codex_quota: null };
     let exportCalls = 0;
     const messages: Array<{ chatId: string; text: string }> = [];
     const snapshot: SanitizedExportSnapshot = {
@@ -444,7 +444,7 @@ describe('SecondaryWindowNotifier', () => {
         },
       },
     };
-    const notifier = new SecondaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
 
     await notifier.pollOnce();
     await notifier.pollOnce();
@@ -453,10 +453,10 @@ describe('SecondaryWindowNotifier', () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-15T00:00:00.000Z</code> -> <code>2026-06-22T00:00:00.000Z</code>');
     expect(messages[0]!.text).toContain('<b>Your upstream tokens</b>: <b>200</b>');
-    expect(messages[0]!.text).toContain('Secondary quota estimate unavailable.');
-    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-15T00:00:00.000Z', '2026-06-22T00:00:00.000Z')).not.toBeNull();
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.usedPercent).toBe(18);
+    expect(messages[0]!.text).toContain('Primary quota estimate unavailable.');
+    expect(store.getPrimaryWindowNotification('12345', 'up_a', '2026-06-15T00:00:00.000Z', '2026-06-22T00:00:00.000Z')).not.toBeNull();
+    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
+    expect(store.getPrimaryWindowState('12345', 'up_a')?.usedPercent).toBe(18);
   });
 
   it('refreshes current window state after a backfill notification was already recorded', async () => {
@@ -470,7 +470,7 @@ describe('SecondaryWindowNotifier', () => {
       flowaySession: 'session-alice',
     });
     vi.setSystemTime(new Date('2026-06-23T00:00:00.000Z'));
-    store.upsertSecondaryWindowState({
+    store.upsertPrimaryWindowState({
       telegramUserId: '12345',
       upstreamId: 'up_a',
       windowStartAt: '2026-06-22T00:00:00.000Z',
@@ -478,7 +478,7 @@ describe('SecondaryWindowNotifier', () => {
       quotaBucketKey: 'premium',
       usedPercent: 18,
     });
-    store.upsertSecondaryWindowNotification({
+    store.upsertPrimaryWindowNotification({
       telegramUserId: '12345',
       upstreamId: 'up_a',
       windowStartAt: '2026-06-15T00:00:00.000Z',
@@ -487,7 +487,7 @@ describe('SecondaryWindowNotifier', () => {
 
     const messages: Array<{ chatId: string; text: string }> = [];
     const floway = {
-      listUpstreams: async () => [upstreamWithSecondaryReset('2026-06-29T00:00:00.000Z', 42)],
+      listUpstreams: async () => [upstreamWithPrimaryReset('2026-06-29T00:00:00.000Z', 42)],
       listUsers: async () => {
         throw new Error('users should not be listed without notification candidates');
       },
@@ -508,16 +508,16 @@ describe('SecondaryWindowNotifier', () => {
         },
       },
     };
-    const notifier = new SecondaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
 
     await notifier.pollOnce();
 
     expect(messages).toEqual([]);
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.usedPercent).toBe(42);
+    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
+    expect(store.getPrimaryWindowState('12345', 'up_a')?.usedPercent).toBe(42);
   });
 
-  it('does not notify when Floway reports a future secondary window before it starts', async () => {
+  it('does not notify when Floway reports a future primary window before it starts', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-21T00:00:00.000Z'));
     const store = createStore();
@@ -528,7 +528,7 @@ describe('SecondaryWindowNotifier', () => {
       flowaySession: 'session-alice',
     });
     vi.setSystemTime(new Date('2026-06-28T10:25:00.000Z'));
-    store.upsertSecondaryWindowState({
+    store.upsertPrimaryWindowState({
       telegramUserId: '12345',
       upstreamId: 'up_a',
       windowStartAt: '2026-06-28T00:51:17.124Z',
@@ -536,7 +536,7 @@ describe('SecondaryWindowNotifier', () => {
       quotaBucketKey: 'premium',
       usedPercent: 3,
     });
-    store.upsertSecondaryWindowNotification({
+    store.upsertPrimaryWindowNotification({
       telegramUserId: '12345',
       upstreamId: 'up_a',
       windowStartAt: '2026-06-21T00:51:16.847Z',
@@ -545,7 +545,7 @@ describe('SecondaryWindowNotifier', () => {
 
     const messages: Array<{ chatId: string; text: string }> = [];
     const floway = {
-      listUpstreams: async () => [upstreamWithSecondaryReset('2026-07-12T00:51:16.847Z', 4)],
+      listUpstreams: async () => [upstreamWithPrimaryReset('2026-07-12T00:51:16.847Z', 4)],
       listUsers: async () => {
         throw new Error('users should not be listed without notification candidates');
       },
@@ -566,14 +566,14 @@ describe('SecondaryWindowNotifier', () => {
         },
       },
     };
-    const notifier = new SecondaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
 
     await notifier.pollOnce();
 
     expect(messages).toEqual([]);
-    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-28T00:51:16.847Z', '2026-07-05T00:51:16.847Z')).toBeNull();
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-07-05T00:51:17.124Z');
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.usedPercent).toBe(3);
+    expect(store.getPrimaryWindowNotification('12345', 'up_a', '2026-06-28T00:51:16.847Z', '2026-07-05T00:51:16.847Z')).toBeNull();
+    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-07-05T00:51:17.124Z');
+    expect(store.getPrimaryWindowState('12345', 'up_a')?.usedPercent).toBe(3);
   });
 
   it('does not treat same-window reset boundary drift within five hours as a refresh', async () => {
@@ -587,7 +587,7 @@ describe('SecondaryWindowNotifier', () => {
       flowaySession: 'session-alice',
     });
     vi.setSystemTime(new Date('2026-06-28T10:25:00.000Z'));
-    store.upsertSecondaryWindowState({
+    store.upsertPrimaryWindowState({
       telegramUserId: '12345',
       upstreamId: 'up_a',
       windowStartAt: '2026-06-28T00:51:17.124Z',
@@ -595,7 +595,7 @@ describe('SecondaryWindowNotifier', () => {
       quotaBucketKey: 'premium',
       usedPercent: 3,
     });
-    store.upsertSecondaryWindowNotification({
+    store.upsertPrimaryWindowNotification({
       telegramUserId: '12345',
       upstreamId: 'up_a',
       windowStartAt: '2026-06-21T00:51:16.847Z',
@@ -604,7 +604,7 @@ describe('SecondaryWindowNotifier', () => {
 
     const messages: Array<{ chatId: string; text: string }> = [];
     const floway = {
-      listUpstreams: async () => [upstreamWithSecondaryReset('2026-07-05T05:51:17.124Z', 3)],
+      listUpstreams: async () => [upstreamWithPrimaryReset('2026-07-05T05:51:17.124Z', 3)],
       listUsers: async () => {
         throw new Error('users should not be listed without notification candidates');
       },
@@ -625,14 +625,14 @@ describe('SecondaryWindowNotifier', () => {
         },
       },
     };
-    const notifier = new SecondaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
 
     await notifier.pollOnce();
 
     expect(messages).toEqual([]);
-    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-28T05:51:17.124Z', '2026-07-05T05:51:17.124Z')).toBeNull();
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-07-05T05:51:17.124Z');
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.usedPercent).toBe(3);
+    expect(store.getPrimaryWindowNotification('12345', 'up_a', '2026-06-28T05:51:17.124Z', '2026-07-05T05:51:17.124Z')).toBeNull();
+    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-07-05T05:51:17.124Z');
+    expect(store.getPrimaryWindowState('12345', 'up_a')?.usedPercent).toBe(3);
   });
 
   it('reports a manually refreshed overlapping window only beyond the five-hour boundary debounce', async () => {
@@ -646,7 +646,7 @@ describe('SecondaryWindowNotifier', () => {
       flowaySession: 'session-alice',
     });
     vi.setSystemTime(new Date('2026-06-30T10:25:00.000Z'));
-    store.upsertSecondaryWindowState({
+    store.upsertPrimaryWindowState({
       telegramUserId: '12345',
       upstreamId: 'up_a',
       windowStartAt: '2026-06-28T00:51:18.169Z',
@@ -654,7 +654,7 @@ describe('SecondaryWindowNotifier', () => {
       quotaBucketKey: 'premium',
       usedPercent: 5,
     });
-    store.upsertSecondaryWindowNotification({
+    store.upsertPrimaryWindowNotification({
       telegramUserId: '12345',
       upstreamId: 'up_a',
       windowStartAt: '2026-06-21T00:51:18.025Z',
@@ -672,7 +672,7 @@ describe('SecondaryWindowNotifier', () => {
       ],
     };
     const floway = {
-      listUpstreams: async () => [upstreamWithSecondaryReset('2026-07-06T06:01:31.799Z', 6)],
+      listUpstreams: async () => [upstreamWithPrimaryReset('2026-07-06T06:01:31.799Z', 6)],
       listUsers: async () => [
         { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
       ],
@@ -691,25 +691,25 @@ describe('SecondaryWindowNotifier', () => {
         },
       },
     };
-    const notifier = new SecondaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
 
     await notifier.pollOnce();
 
     expect(messages).toHaveLength(1);
     expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-28T00:51:18.169Z</code> -> <code>2026-06-29T06:01:31.799Z</code>');
-    expect(messages[0]!.text).toContain('<b>Window note</b>: Upstream refreshed this secondary window early; this is not a natural cycle.');
+    expect(messages[0]!.text).toContain('<b>Window note</b>: Upstream refreshed this primary window early; this is not a natural cycle.');
     expect(messages[0]!.text).toContain('<b>Your upstream tokens</b>: <b>100</b>');
     expect(messages[0]!.text).not.toContain('999');
-    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-22T06:01:31.799Z', '2026-06-29T06:01:31.799Z')).toBeNull();
-    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-28T00:51:18.169Z', '2026-06-29T06:01:31.799Z')).not.toBeNull();
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.windowStartAt).toBe('2026-06-29T06:01:31.799Z');
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-07-06T06:01:31.799Z');
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.usedPercent).toBe(6);
+    expect(store.getPrimaryWindowNotification('12345', 'up_a', '2026-06-22T06:01:31.799Z', '2026-06-29T06:01:31.799Z')).toBeNull();
+    expect(store.getPrimaryWindowNotification('12345', 'up_a', '2026-06-28T00:51:18.169Z', '2026-06-29T06:01:31.799Z')).not.toBeNull();
+    expect(store.getPrimaryWindowState('12345', 'up_a')?.windowStartAt).toBe('2026-06-29T06:01:31.799Z');
+    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-07-06T06:01:31.799Z');
+    expect(store.getPrimaryWindowState('12345', 'up_a')?.usedPercent).toBe(6);
 
     await notifier.pollOnce();
 
     expect(messages).toHaveLength(1);
-    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-22T06:01:31.799Z', '2026-06-29T06:01:31.799Z')).toBeNull();
+    expect(store.getPrimaryWindowNotification('12345', 'up_a', '2026-06-22T06:01:31.799Z', '2026-06-29T06:01:31.799Z')).toBeNull();
   });
 
   it('treats a current window that starts in the previous end hour as a natural refresh', async () => {
@@ -723,7 +723,7 @@ describe('SecondaryWindowNotifier', () => {
       flowaySession: 'session-alice',
     });
     vi.setSystemTime(new Date('2026-07-05T00:10:00.000Z'));
-    store.upsertSecondaryWindowState({
+    store.upsertPrimaryWindowState({
       telegramUserId: '12345',
       upstreamId: 'up_a',
       windowStartAt: '2026-06-28T00:51:18.169Z',
@@ -731,7 +731,7 @@ describe('SecondaryWindowNotifier', () => {
       quotaBucketKey: 'premium',
       usedPercent: 5,
     });
-    store.upsertSecondaryWindowNotification({
+    store.upsertPrimaryWindowNotification({
       telegramUserId: '12345',
       upstreamId: 'up_a',
       windowStartAt: '2026-06-21T00:51:18.025Z',
@@ -748,7 +748,7 @@ describe('SecondaryWindowNotifier', () => {
       ],
     };
     const floway = {
-      listUpstreams: async () => [upstreamWithSecondaryReset('2026-07-12T00:30:00.000Z', 6)],
+      listUpstreams: async () => [upstreamWithPrimaryReset('2026-07-12T00:30:00.000Z', 6)],
       listUsers: async () => [
         { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
       ],
@@ -767,18 +767,18 @@ describe('SecondaryWindowNotifier', () => {
         },
       },
     };
-    const notifier = new SecondaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
 
     await notifier.pollOnce();
 
     expect(messages).toHaveLength(1);
     expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-28T00:51:18.169Z</code> -> <code>2026-07-05T00:51:18.169Z</code>');
     expect(messages[0]!.text).not.toContain('<b>Window note</b>');
-    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-28T00:30:00.000Z', '2026-07-05T00:30:00.000Z')).toBeNull();
-    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-28T00:51:18.169Z', '2026-07-05T00:51:18.169Z')).not.toBeNull();
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.windowStartAt).toBe('2026-07-05T00:30:00.000Z');
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-07-12T00:30:00.000Z');
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.usedPercent).toBe(6);
+    expect(store.getPrimaryWindowNotification('12345', 'up_a', '2026-06-28T00:30:00.000Z', '2026-07-05T00:30:00.000Z')).toBeNull();
+    expect(store.getPrimaryWindowNotification('12345', 'up_a', '2026-06-28T00:51:18.169Z', '2026-07-05T00:51:18.169Z')).not.toBeNull();
+    expect(store.getPrimaryWindowState('12345', 'up_a')?.windowStartAt).toBe('2026-07-05T00:30:00.000Z');
+    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-07-12T00:30:00.000Z');
+    expect(store.getPrimaryWindowState('12345', 'up_a')?.usedPercent).toBe(6);
   });
 
   it('does not let a premature notification ledger suppress the real reset notification', async () => {
@@ -791,7 +791,7 @@ describe('SecondaryWindowNotifier', () => {
       username: 'alice',
       flowaySession: 'session-alice',
     });
-    store.upsertSecondaryWindowState({
+    store.upsertPrimaryWindowState({
       telegramUserId: '12345',
       upstreamId: 'up_a',
       windowStartAt: '2026-06-28T00:51:17.124Z',
@@ -800,7 +800,7 @@ describe('SecondaryWindowNotifier', () => {
       usedPercent: 3,
     });
     vi.setSystemTime(new Date('2026-06-28T10:25:00.000Z'));
-    store.upsertSecondaryWindowNotification({
+    store.upsertPrimaryWindowNotification({
       telegramUserId: '12345',
       upstreamId: 'up_a',
       windowStartAt: '2026-06-28T00:51:16.847Z',
@@ -818,7 +818,7 @@ describe('SecondaryWindowNotifier', () => {
       ],
     };
     const floway = {
-      listUpstreams: async () => [upstreamWithSecondaryReset('2026-07-12T00:51:16.847Z', 4)],
+      listUpstreams: async () => [upstreamWithPrimaryReset('2026-07-12T00:51:16.847Z', 4)],
       listUsers: async () => [
         { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
       ],
@@ -837,16 +837,16 @@ describe('SecondaryWindowNotifier', () => {
         },
       },
     };
-    const notifier = new SecondaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
 
     await notifier.pollOnce();
 
     expect(messages).toHaveLength(1);
     expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-28T00:51:17.124Z</code> -> <code>2026-07-05T00:51:17.124Z</code>');
     expect(messages[0]!.text).toContain('<b>Your upstream tokens</b>: <b>100</b>');
-    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-28T00:51:17.124Z', '2026-07-05T00:51:17.124Z')?.sentAt)
+    expect(store.getPrimaryWindowNotification('12345', 'up_a', '2026-06-28T00:51:17.124Z', '2026-07-05T00:51:17.124Z')?.sentAt)
       .toBe('2026-07-05T00:52:00.000Z');
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-07-12T00:51:16.847Z');
+    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-07-12T00:51:16.847Z');
   });
 
   it('does not backfill a previous window that ended before the binding existed', async () => {
@@ -859,7 +859,7 @@ describe('SecondaryWindowNotifier', () => {
       username: 'alice',
       flowaySession: 'session-alice',
     });
-    store.upsertSecondaryWindowState({
+    store.upsertPrimaryWindowState({
       telegramUserId: '12345',
       upstreamId: 'up_a',
       windowStartAt: '2026-06-22T00:00:00.000Z',
@@ -870,7 +870,7 @@ describe('SecondaryWindowNotifier', () => {
 
     const messages: Array<{ chatId: string; text: string }> = [];
     const floway = {
-      listUpstreams: async () => [upstreamWithSecondaryReset('2026-06-29T00:00:00.000Z', 18)],
+      listUpstreams: async () => [upstreamWithPrimaryReset('2026-06-29T00:00:00.000Z', 18)],
       listUsers: async () => [
         { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'], createdAt: '2026-06-23T00:00:00.000Z' },
       ],
@@ -891,13 +891,13 @@ describe('SecondaryWindowNotifier', () => {
         },
       },
     };
-    const notifier = new SecondaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
 
     await notifier.pollOnce();
 
     expect(messages).toEqual([]);
-    expect(store.getSecondaryWindowNotification('12345', 'up_a', '2026-06-15T00:00:00.000Z', '2026-06-22T00:00:00.000Z')).toBeNull();
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
+    expect(store.getPrimaryWindowNotification('12345', 'up_a', '2026-06-15T00:00:00.000Z', '2026-06-22T00:00:00.000Z')).toBeNull();
+    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
   });
 
   it('uses local state to notify when Floway quota is stale after the reset time', async () => {
@@ -911,7 +911,7 @@ describe('SecondaryWindowNotifier', () => {
       flowaySession: 'session-alice',
     });
 
-    let currentUpstream = upstreamWithSecondaryReset('2026-06-22T00:00:00.000Z', 80);
+    let currentUpstream = upstreamWithPrimaryReset('2026-06-22T00:00:00.000Z', 80);
     let exportCalls = 0;
     const messages: Array<{ chatId: string; text: string }> = [];
     const snapshot: SanitizedExportSnapshot = {
@@ -945,15 +945,15 @@ describe('SecondaryWindowNotifier', () => {
         },
       },
     };
-    const notifier = new SecondaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
 
     await notifier.pollOnce();
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-22T00:00:00.000Z');
+    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-22T00:00:00.000Z');
 
     currentUpstream = { ...currentUpstream, codex_quota: null };
     await notifier.pollOnce();
     expect(messages).toHaveLength(0);
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-22T00:00:00.000Z');
+    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-22T00:00:00.000Z');
 
     vi.setSystemTime(new Date('2026-06-22T00:01:00.000Z'));
     await notifier.pollOnce();
@@ -962,8 +962,8 @@ describe('SecondaryWindowNotifier', () => {
     expect(exportCalls).toBe(1);
     expect(messages).toHaveLength(1);
     expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-15T00:00:00.000Z</code> -> <code>2026-06-22T00:00:00.000Z</code>');
-    expect(messages[0]!.text).toContain('<b>Upstream secondary used</b>:\n[||||||||||||   ] <b>80.0%</b>');
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
+    expect(messages[0]!.text).toContain('<b>Upstream primary used</b>:\n[||||||||||||   ] <b>80.0%</b>');
+    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
   });
 
   it('uses the reset hour when local state detects stale Floway quota', async () => {
@@ -977,7 +977,7 @@ describe('SecondaryWindowNotifier', () => {
       flowaySession: 'session-alice',
     });
 
-    let currentUpstream = upstreamWithSecondaryReset('2026-06-22T00:51:00.000Z', 80);
+    let currentUpstream = upstreamWithPrimaryReset('2026-06-22T00:51:00.000Z', 80);
     const messages: Array<{ chatId: string; text: string }> = [];
     const snapshot: SanitizedExportSnapshot = {
       exportedAt: '2026-06-22T00:10:00.000Z',
@@ -1007,7 +1007,7 @@ describe('SecondaryWindowNotifier', () => {
         },
       },
     };
-    const notifier = new SecondaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
 
     await notifier.pollOnce();
 
@@ -1017,11 +1017,11 @@ describe('SecondaryWindowNotifier', () => {
 
     expect(messages).toHaveLength(1);
     expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-15T00:51:00.000Z</code> -> <code>2026-06-22T00:51:00.000Z</code>');
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.windowStartAt).toBe('2026-06-22T00:51:00.000Z');
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:51:00.000Z');
+    expect(store.getPrimaryWindowState('12345', 'up_a')?.windowStartAt).toBe('2026-06-22T00:51:00.000Z');
+    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:51:00.000Z');
   });
 
-  it('clears stale secondary window state when an upstream no longer supports Codex windows', async () => {
+  it('clears stale primary window state when an upstream no longer supports Codex windows', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-23T00:01:00.000Z'));
     const store = createStore();
@@ -1031,7 +1031,7 @@ describe('SecondaryWindowNotifier', () => {
       username: 'alice',
       flowaySession: 'session-alice',
     });
-    store.upsertSecondaryWindowState({
+    store.upsertPrimaryWindowState({
       telegramUserId: '12345',
       upstreamId: 'up_a',
       windowStartAt: '2026-06-15T00:00:00.000Z',
@@ -1043,7 +1043,7 @@ describe('SecondaryWindowNotifier', () => {
     let exportCalls = 0;
     const messages: Array<{ chatId: string; text: string }> = [];
     const unsupportedUpstream = {
-      ...upstreamWithSecondaryReset('2026-06-22T00:00:00.000Z', 80),
+      ...upstreamWithPrimaryReset('2026-06-22T00:00:00.000Z', 80),
       kind: 'custom',
       codex_quota: null,
     };
@@ -1068,13 +1068,13 @@ describe('SecondaryWindowNotifier', () => {
         },
       },
     };
-    const notifier = new SecondaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
 
     await notifier.pollOnce();
 
     expect(exportCalls).toBe(0);
     expect(messages).toHaveLength(0);
-    expect(store.getSecondaryWindowState('12345', 'up_a')).toBeNull();
+    expect(store.getPrimaryWindowState('12345', 'up_a')).toBeNull();
   });
 
   it('does not notify for upstreams outside the bound user access list', async () => {
@@ -1085,7 +1085,7 @@ describe('SecondaryWindowNotifier', () => {
       username: 'alice',
       flowaySession: 'session-alice',
     });
-    store.upsertSecondaryWindowState({
+    store.upsertPrimaryWindowState({
       telegramUserId: '12345',
       upstreamId: 'up_b',
       windowStartAt: '2026-06-15T00:00:00.000Z',
@@ -1096,7 +1096,7 @@ describe('SecondaryWindowNotifier', () => {
 
     let exportCalls = 0;
     const floway = {
-      listUpstreams: async () => [upstreamWithSecondaryReset('2026-06-29T00:00:00.000Z', 0.4, 'up_b')],
+      listUpstreams: async () => [upstreamWithPrimaryReset('2026-06-29T00:00:00.000Z', 0.4, 'up_b')],
       listUsers: async () => [],
       getMe: async () => ({
         user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
@@ -1113,12 +1113,12 @@ describe('SecondaryWindowNotifier', () => {
         sendMessage: async () => ({}),
       },
     };
-    const notifier = new SecondaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
 
     await notifier.pollOnce();
 
     expect(exportCalls).toBe(0);
-    expect(store.getSecondaryWindowState('12345', 'up_b')).toBeNull();
+    expect(store.getPrimaryWindowState('12345', 'up_b')).toBeNull();
   });
 
   it('retries notifications after Telegram send failures before advancing state', async () => {
@@ -1132,7 +1132,7 @@ describe('SecondaryWindowNotifier', () => {
       flowaySession: 'session-alice',
     });
 
-    let currentUpstream = upstreamWithSecondaryReset('2026-06-22T00:00:00.000Z', 80);
+    let currentUpstream = upstreamWithPrimaryReset('2026-06-22T00:00:00.000Z', 80);
     let sendAttempts = 0;
     const floway = {
       listUpstreams: async () => [currentUpstream],
@@ -1155,20 +1155,20 @@ describe('SecondaryWindowNotifier', () => {
         },
       },
     };
-    const notifier = new SecondaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
 
     await notifier.pollOnce();
     vi.setSystemTime(new Date('2026-06-22T00:01:00.000Z'));
-    currentUpstream = upstreamWithSecondaryReset('2026-06-29T00:00:00.000Z', 0.4);
+    currentUpstream = upstreamWithPrimaryReset('2026-06-29T00:00:00.000Z', 0.4);
     await notifier.pollOnce();
 
     expect(sendAttempts).toBe(1);
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-22T00:00:00.000Z');
+    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-22T00:00:00.000Z');
 
     await notifier.pollOnce();
 
     expect(sendAttempts).toBe(2);
-    expect(store.getSecondaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
+    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
   });
 
   it('waits for the active poll before stop resolves', async () => {
@@ -1194,7 +1194,7 @@ describe('SecondaryWindowNotifier', () => {
         sendMessage: async () => ({}),
       },
     };
-    const notifier = new SecondaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
 
     notifier.start();
     expect(listStarted).toBe(true);
@@ -1226,7 +1226,7 @@ const emptySnapshot = (): SanitizedExportSnapshot => ({
   usage: [],
 });
 
-const upstreamWithSecondaryReset = (resetAfterAt: string, usedPercent: number, id = 'up_a'): UpstreamRecord => ({
+const upstreamWithPrimaryReset = (resetAfterAt: string, usedPercent: number, id = 'up_a'): UpstreamRecord => ({
   id,
   kind: 'codex',
   name: 'Codex main',
@@ -1243,9 +1243,9 @@ const upstreamWithSecondaryReset = (resetAfterAt: string, usedPercent: number, i
     premium: {
       observed_at: resetAfterAt,
       active_limit: 'premium',
-      secondary_window_minutes: 10080,
-      secondary_reset_after_at: resetAfterAt,
-      secondary_used_percent: usedPercent,
+      primary_window_minutes: 10080,
+      primary_reset_after_at: resetAfterAt,
+      primary_used_percent: usedPercent,
     },
   },
 });

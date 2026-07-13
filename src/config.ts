@@ -35,6 +35,6 @@ export const loadConfig = (): AppConfig => {
     botDbPath,
     botSecretKey: parseSecretKey(required('BOT_SECRET_KEY')),
     usageExportCacheTtlSeconds: parsePositiveInteger(process.env.USAGE_EXPORT_CACHE_TTL_SECONDS, 30, 'USAGE_EXPORT_CACHE_TTL_SECONDS'),
-    secondaryWindowNotifyIntervalSeconds: parsePositiveInteger(process.env.SECONDARY_WINDOW_NOTIFY_INTERVAL_SECONDS, 300, 'SECONDARY_WINDOW_NOTIFY_INTERVAL_SECONDS'),
+    primaryWindowNotifyIntervalSeconds: parsePositiveInteger(process.env.PRIMARY_WINDOW_NOTIFY_INTERVAL_SECONDS, 300, 'PRIMARY_WINDOW_NOTIFY_INTERVAL_SECONDS'),
   };
 };

@@ -9,6 +9,9 @@
   for a commit. Inside a git worktree (any non-main branch), commit every
   change immediately and autonomously; do not ask first, and do not leave
   in-flight work uncommitted.
+- Give every task branch and worktree a meaningful name beginning with
+  `floway-tg-bot/`; replace generated or random names before doing substantive
+  work.
 - Before claiming work is complete, run the relevant verification command and
   read the result. Worktree commits are the exception: commit them directly
   without running any test, lint, or typecheck first. Verification belongs to

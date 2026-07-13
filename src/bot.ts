@@ -14,7 +14,7 @@ import {
   formatQuotaEstimateInsufficientNotification,
   formatQuotaEstimateNotification,
   formatQuotaEstimateVerbose,
-  formatSecondaryWindowNotification,
+  formatPrimaryWindowNotification,
   formatStartHelp,
   formatUpstreamDetail,
   formatUpstreamList,
@@ -26,8 +26,7 @@ import {
 import { FlowayClient, FlowayHttpError } from './floway-client.js';
 import {
   canShareUpstreamQuota,
-  computeWindowsForUpstream,
-  selectSecondaryQuotaWindowForUpstream,
+  selectPrimaryQuotaWindowForUpstream,
   summarizeUsageLeaderboard,
   summarizeUsageQuotaEstimate,
   summarizeUsageWindow,
@@ -38,7 +37,7 @@ import type { AppConfig, Binding, FlowayUser, UpstreamRecord } from './types.js'
 
 export { canShareUpstreamQuota } from './usage.js';
 
-export const TEST_SECONDARY_WINDOW_COMMAND = 'test_secondary_window';
+export const TEST_PRIMARY_WINDOW_COMMAND = 'test_primary_window';
 
 export const BOT_COMMANDS = [
   { command: 'start', description: 'Show bot usage help' },
@@ -252,16 +251,20 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
       }
       const upstream = selection.upstream;
 
-      const windows = computeWindowsForUpstream(upstream);
-      if (windows.length === 0) {
+      const primaryWindow = selectPrimaryQuotaWindowForUpstream(upstream);
+      if (!primaryWindow) {
         await replyLong(ctx, formatUsageReports(upstream, []));
         return;
       }
 
       const exportSnapshot = await floway.exportUsageSnapshot();
-      const reports: UsageWindowReport[] = windows.map(window =>
-        summarizeUsageWindow(bound.binding.flowayUserId, upstream.id, window, exportSnapshot));
-      await replyLong(ctx, formatUsageReports(upstream, reports));
+      const report: UsageWindowReport = summarizeUsageWindow(
+        bound.binding.flowayUserId,
+        upstream.id,
+        primaryWindow,
+        exportSnapshot,
+      );
+      await replyLong(ctx, formatUsageReports(upstream, [report]));
     } catch (error) {
       await replyError(ctx, 'Failed to load usage', error);
     }
@@ -289,14 +292,14 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
         return;
       }
       const upstream = selection.upstream;
-      const secondaryWindow = selectSecondaryQuotaWindowForUpstream(upstream);
-      const secondaryUsedPercent = secondaryWindow?.upstreamPercent;
-      if (!secondaryWindow || secondaryUsedPercent === undefined) {
+      const primaryWindow = selectPrimaryQuotaWindowForUpstream(upstream);
+      const primaryUsedPercent = primaryWindow?.upstreamPercent;
+      if (!primaryWindow || primaryUsedPercent === undefined) {
         await replyLong(ctx, formatQuotaEstimate(upstream, null));
         return;
       }
-      if (secondaryUsedPercent < 1) {
-        await replyLong(ctx, formatQuotaEstimateInsufficient(upstream, secondaryWindow, secondaryUsedPercent));
+      if (primaryUsedPercent < 1) {
+        await replyLong(ctx, formatQuotaEstimateInsufficient(upstream, primaryWindow, primaryUsedPercent));
         return;
       }
 
@@ -305,8 +308,8 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
       const report = summarizeUsageQuotaEstimate(
         bound.binding.flowayUserId,
         upstream.id,
-        secondaryWindow,
-        secondaryUsedPercent,
+        primaryWindow,
+        primaryUsedPercent,
         exportSnapshot,
         nonAdminUserCount,
       );
@@ -338,7 +341,7 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
     }
   });
 
-  bot.command(TEST_SECONDARY_WINDOW_COMMAND, async ctx => {
+  bot.command(TEST_PRIMARY_WINDOW_COMMAND, async ctx => {
     if (!(await requirePrivate(ctx))) return;
     const bound = await requireBinding(ctx, store, floway);
     if (!bound) return;
@@ -350,15 +353,15 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
         floway.listUsers(),
       ]);
       const allowedUpstreams = filterUpstreamsForUser(upstreams, bound.user).filter(upstream => upstream.enabled);
-      const selection = selectUpstream(upstreamId, allowedUpstreams, TEST_SECONDARY_WINDOW_COMMAND);
+      const selection = selectUpstream(upstreamId, allowedUpstreams, TEST_PRIMARY_WINDOW_COMMAND);
       if ('message' in selection) {
         await replyLong(ctx, selection.message);
         return;
       }
 
       const upstream = selection.upstream;
-      const secondaryWindow = selectSecondaryQuotaWindowForUpstream(upstream);
-      if (!secondaryWindow) {
+      const primaryWindow = selectPrimaryQuotaWindowForUpstream(upstream);
+      if (!primaryWindow) {
         await replyLong(ctx, formatQuotaEstimate(upstream, null));
         return;
       }
@@ -367,24 +370,24 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
       const usageReport = summarizeUsageWindow(
         bound.binding.flowayUserId,
         upstream.id,
-        secondaryWindow,
+        primaryWindow,
         exportSnapshot,
       );
-      const secondaryUsedPercent = secondaryWindow.upstreamPercent;
-      const quotaEstimate = formatSecondaryWindowQuotaEstimate(
+      const primaryUsedPercent = primaryWindow.upstreamPercent;
+      const quotaEstimate = formatPrimaryWindowQuotaEstimate(
         bound.binding.flowayUserId,
         upstream,
-        secondaryWindow,
-        secondaryUsedPercent,
+        primaryWindow,
+        primaryUsedPercent,
         exportSnapshot,
         users,
       );
       await replyLong(ctx, [
         '<b>Test notification</b>',
-        formatSecondaryWindowNotification(upstream, usageReport, quotaEstimate),
+        formatPrimaryWindowNotification(upstream, usageReport, quotaEstimate),
       ].join('\n'));
     } catch (error) {
-      await replyError(ctx, 'Failed to send secondary window test notification', error);
+      await replyError(ctx, 'Failed to send primary window test notification', error);
     }
   });
 
@@ -568,7 +571,7 @@ export const filterUpstreamsForUser = (
 export const selectUpstream = (
   requestedId: string,
   upstreams: readonly UpstreamRecord[],
-  command: 'upstream' | 'usage' | 'quota' | 'quota verbose' | typeof TEST_SECONDARY_WINDOW_COMMAND,
+  command: 'upstream' | 'usage' | 'quota' | 'quota verbose' | typeof TEST_PRIMARY_WINDOW_COMMAND,
 ): { upstream: UpstreamRecord } | { message: string } => {
   if (requestedId) {
     const upstream = upstreams.find(item => item.id === requestedId);
@@ -580,23 +583,23 @@ export const selectUpstream = (
   return { message: formatUpstreamSelectionRequired(command, upstreams) };
 };
 
-const formatSecondaryWindowQuotaEstimate = (
+const formatPrimaryWindowQuotaEstimate = (
   flowayUserId: number,
   upstream: UpstreamRecord,
-  secondaryWindow: NonNullable<ReturnType<typeof selectSecondaryQuotaWindowForUpstream>>,
-  secondaryUsedPercent: number | undefined,
+  primaryWindow: NonNullable<ReturnType<typeof selectPrimaryQuotaWindowForUpstream>>,
+  primaryUsedPercent: number | undefined,
   exportSnapshot: Parameters<typeof summarizeUsageWindow>[3],
   users: Awaited<ReturnType<FlowayClient['listUsers']>>,
 ): string => {
-  if (secondaryUsedPercent === undefined) return formatQuotaEstimateNotification(null);
-  if (secondaryUsedPercent < 1) return formatQuotaEstimateInsufficientNotification(secondaryUsedPercent);
+  if (primaryUsedPercent === undefined) return formatQuotaEstimateNotification(null);
+  if (primaryUsedPercent < 1) return formatQuotaEstimateInsufficientNotification(primaryUsedPercent);
 
   const nonAdminUserCount = users.filter(user => canShareUpstreamQuota(user, upstream.id)).length;
   const report = summarizeUsageQuotaEstimate(
     flowayUserId,
     upstream.id,
-    secondaryWindow,
-    secondaryUsedPercent,
+    primaryWindow,
+    primaryUsedPercent,
     exportSnapshot,
     nonAdminUserCount,
   );

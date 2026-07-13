@@ -113,7 +113,7 @@ export const formatStartHelp = (binding: Binding | null): string => {
     `${code('/newkey <name> all')} - create an API key`,
     `${code('/upstreams')} - list upstreams`,
     `${code('/usage <upstream_id>')} - upstream usage`,
-    `${code('/quota <upstream_id>')} - estimated secondary quota`,
+    `${code('/quota <upstream_id>')} - estimated primary quota`,
     `${code('/leaderboard [1d|7d|30d]')} - top users by tokens, cost, and cache`,
     `${code('/me')} - binding info`,
   ].join('\n');
@@ -157,7 +157,7 @@ export const formatUpstreamList = (upstreams: readonly UpstreamRecord[]): string
   return [blockTitle(`Floway upstreams (${upstreams.length})`), ...rows].join('\n\n');
 };
 
-export const formatUpstreamSelectionRequired = (command: 'upstream' | 'usage' | 'quota' | 'quota verbose' | 'test_secondary_window', upstreams: readonly UpstreamRecord[]): string => {
+export const formatUpstreamSelectionRequired = (command: 'upstream' | 'usage' | 'quota' | 'quota verbose' | 'test_primary_window', upstreams: readonly UpstreamRecord[]): string => {
   if (upstreams.length === 0) return blockTitle('No upstreams found.');
   return [
     blockTitle('Choose an upstream'),
@@ -192,7 +192,6 @@ export const formatUpstreamDetail = (
         label('Bucket', quotaBucketLabel(bucket)),
         label('Observed', code(bucket.snapshot.observed_at)),
         label('Primary', formatQuotaBucketWindow(bucket.snapshot.primary_used_percent, bucket.snapshot.primary_window_minutes, bucket.snapshot.primary_reset_after_at)),
-        label('Secondary', formatQuotaBucketWindow(bucket.snapshot.secondary_used_percent, bucket.snapshot.secondary_window_minutes, bucket.snapshot.secondary_reset_after_at)),
       );
       if (bucket.snapshot.active_limit) lines.push(label('Active limit', code(bucket.snapshot.active_limit)));
       if (bucket.snapshot.credits_balance !== undefined) lines.push(label('Credits', code(bucket.snapshot.credits_balance)));
@@ -248,7 +247,7 @@ export const formatUsageReports = (upstream: UpstreamRecord, reports: readonly U
   if (reports.length === 0) {
     return [
       blockTitle('Usage unavailable'),
-      `No primary/secondary windows are available for ${bold(upstream.name)} ${code(upstream.id)}.`,
+      `No primary window is available for ${bold(upstream.name)} ${code(upstream.id)}.`,
     ].join('\n');
   }
   const lines = [`${blockTitle('Usage')} ${bold(upstream.name)} ${code(upstream.id)}`];
@@ -270,14 +269,14 @@ export const formatUsageReports = (upstream: UpstreamRecord, reports: readonly U
   return lines.join('\n');
 };
 
-export const formatSecondaryWindowNotification = (
+export const formatPrimaryWindowNotification = (
   upstream: UpstreamRecord,
   report: UsageWindowReport,
   quotaEstimate: string,
   note?: string,
 ): string => {
   const lines = [
-    blockTitle('Secondary window refreshed'),
+    blockTitle('Primary window refreshed'),
     `${bold(upstream.name)} ${code(upstream.id)}`,
     label('Active limit', usageWindowBucketLabel(report.window)),
     '',
@@ -299,7 +298,7 @@ export const formatQuotaEstimate = (upstream: UpstreamRecord, report: UsageQuota
   if (!report) {
     return [
       blockTitle('Quota estimate unavailable'),
-      `Secondary quota window is not available for ${bold(upstream.name)} ${code(upstream.id)}.`,
+      `Primary quota window is not available for ${bold(upstream.name)} ${code(upstream.id)}.`,
     ].join('\n');
   }
 
@@ -309,7 +308,7 @@ export const formatQuotaEstimate = (upstream: UpstreamRecord, report: UsageQuota
     bold(upstream.name),
     label('Active limit', usageWindowBucketLabel(report.window)),
     `Reset in ${formatDurationUntil(report.window.endAt)}`,
-    `${bold('Upstream secondary used')}:`,
+    `${bold('Upstream primary used')}:`,
     formatProgressPercent(report.upstreamUsedPercent),
     `${bold('Estimated your used')}:`,
     `${formatProgressPercent(report.estimatedUserUsedPercent)} of your equal share (${html(`Assumed ${formatNumber(report.nonAdminUserCount)} users`)})`,
@@ -319,10 +318,10 @@ export const formatQuotaEstimate = (upstream: UpstreamRecord, report: UsageQuota
 };
 
 export const formatQuotaEstimateNotification = (report: UsageQuotaEstimate | null): string => {
-  if (!report) return 'Secondary quota estimate unavailable.';
+  if (!report) return 'Primary quota estimate unavailable.';
 
   return [
-    `${bold('Upstream secondary used')}:`,
+    `${bold('Upstream primary used')}:`,
     formatProgressPercent(report.upstreamUsedPercent),
     `${bold('Estimated your used')}:`,
     `${formatProgressPercent(report.estimatedUserUsedPercent)} of your equal share (${html(`Assumed ${formatNumber(report.nonAdminUserCount)} users`)})`,
@@ -333,7 +332,7 @@ export const formatQuotaEstimateVerbose = (upstream: UpstreamRecord, report: Usa
   if (!report) {
     return [
       blockTitle('Quota estimate unavailable'),
-      `Secondary quota window is not available for ${bold(upstream.name)} ${code(upstream.id)}.`,
+      `Primary quota window is not available for ${bold(upstream.name)} ${code(upstream.id)}.`,
     ].join('\n');
   }
 
@@ -341,7 +340,7 @@ export const formatQuotaEstimateVerbose = (upstream: UpstreamRecord, report: Usa
     `${blockTitle('Quota estimate')} ${bold(upstream.name)} ${code(upstream.id)}`,
     label('Active limit', usageWindowBucketLabel(report.window)),
     label('Window', `${code(report.window.startAt)} -> ${code(report.window.endAt)}`),
-    label('Upstream secondary used', formatProgressPercent(report.upstreamUsedPercent)),
+    label('Upstream primary used', formatProgressPercent(report.upstreamUsedPercent)),
     label('Assumed users', `${formatNumber(report.nonAdminUserCount)} non-admin Floway users`),
     label('Equal upstream share', formatProgressPercent(report.equalSharePercent)),
     '',
@@ -362,7 +361,7 @@ export const formatQuotaEstimateInsufficient = (upstream: UpstreamRecord, window
     bold(upstream.name),
     label('Active limit', usageWindowBucketLabel(window)),
     `Reset in ${formatDurationUntil(window.endAt)}`,
-    `${bold('Upstream secondary used')}:`,
+    `${bold('Upstream primary used')}:`,
     formatProgressPercent(upstreamUsedPercent),
     '',
     'Not enough usage data yet. The limit probably just reset, so go make some requests.',
@@ -370,7 +369,7 @@ export const formatQuotaEstimateInsufficient = (upstream: UpstreamRecord, window
 
 export const formatQuotaEstimateInsufficientNotification = (upstreamUsedPercent: number): string =>
   [
-    `${bold('Upstream secondary used')}:`,
+    `${bold('Upstream primary used')}:`,
     formatProgressPercent(upstreamUsedPercent),
     '',
     'Not enough usage data yet. The limit probably just reset, so go make some requests.',
@@ -437,7 +436,7 @@ const codexQuotaListSummary = (upstream: UpstreamRecord): string => {
   const buckets = codexQuotaBucketsForUpstream(upstream);
   if (buckets.length === 0) return '';
   const bucket = buckets[0]!;
-  return `\n   quota ${quotaBucketLabel(bucket)}: primary ${bold(formatPercent(bucket.snapshot.primary_used_percent))}, secondary ${bold(formatPercent(bucket.snapshot.secondary_used_percent))}`;
+  return `\n   quota ${quotaBucketLabel(bucket)}: primary ${bold(formatPercent(bucket.snapshot.primary_used_percent))}`;
 };
 
 const quotaBucketLabel = (bucket: CodexQuotaBucket): string =>

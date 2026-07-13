@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  computeWindowsForUpstream,
-  computeWindowsFromQuota,
-  selectSecondaryQuotaWindowForUpstream,
+  buildPrimaryQuotaWindow,
+  selectPrimaryQuotaWindowForUpstream,
   recordCostUsd,
   summarizeUsageLeaderboard,
   summarizeUsageQuotaEstimate,
@@ -13,100 +12,91 @@ import {
 import type { SanitizedExportSnapshot, UsageRecord } from '../src/types.js';
 
 describe('usage windows', () => {
-  it('derives Floway hour buckets from Codex quota reset windows', () => {
-    const windows = computeWindowsFromQuota({
-      observed_at: '2026-06-21T00:00:00.000Z',
-      primary_used_percent: 42,
-      primary_window_minutes: 300,
-      primary_reset_after_at: '2026-06-21T05:30:00.000Z',
-      secondary_used_percent: 90,
-      secondary_window_minutes: 10080,
-      secondary_reset_after_at: '2026-06-28T00:00:00.000Z',
+  it('derives exact boundaries and Floway hour buckets from the primary reset window', () => {
+    const window = buildPrimaryQuotaWindow({
+      primary_used_percent: 90,
+      primary_window_minutes: 10080,
+      primary_reset_after_at: '2026-06-28T00:30:45.123Z',
     });
 
-    expect(windows[0]).toMatchObject({
+    expect(window).toMatchObject({
       label: 'Primary window',
-      startHour: '2026-06-21T00',
-      endHour: '2026-06-21T05',
-      upstreamPercent: 42,
-    });
-    expect(windows[1]).toMatchObject({
-      label: 'Secondary window',
+      startAt: '2026-06-21T00:30:45.123Z',
+      endAt: '2026-06-28T00:30:45.123Z',
       startHour: '2026-06-21T00',
       endHour: '2026-06-28T00',
       upstreamPercent: 90,
     });
   });
 
-  it('returns no windows when quota is unavailable', () => {
-    expect(computeWindowsFromQuota(null)).toEqual([]);
-    expect(computeWindowsFromQuota({ observed_at: 'x' })).toEqual([]);
+  it('returns no window when quota is unavailable or invalid', () => {
+    expect(buildPrimaryQuotaWindow(null)).toBeNull();
+    expect(buildPrimaryQuotaWindow({})).toBeNull();
+    expect(buildPrimaryQuotaWindow({ primary_window_minutes: 10080, primary_reset_after_at: 'x' })).toBeNull();
   });
 
-  it('reads quota windows only from kinds that expose a premium active-limit snapshot', () => {
+  it('reads a primary quota window only from Codex premium snapshots', () => {
     const codexQuota = {
       observed_at: '2026-06-21T00:00:00.000Z',
       active_limit: 'premium',
-      secondary_used_percent: 90,
-      secondary_window_minutes: 10080,
-      secondary_reset_after_at: '2026-06-28T00:00:00.000Z',
+      primary_used_percent: 90,
+      primary_window_minutes: 10080,
+      primary_reset_after_at: '2026-06-28T00:00:00.000Z',
     };
 
-    expect(computeWindowsForUpstream({ kind: 'codex', codex_quota: { 'chatgpt-plus': codexQuota } })).toHaveLength(1);
-    expect(computeWindowsForUpstream({ kind: 'codex', codex_quota: { 'chatgpt-plus': codexQuota } })).toHaveLength(1);
-    expect(computeWindowsForUpstream({ kind: 'custom', codex_quota: { 'chatgpt-plus': codexQuota } })).toEqual([]);
+    expect(selectPrimaryQuotaWindowForUpstream({ kind: 'codex', codex_quota: { 'chatgpt-plus': codexQuota } })).not.toBeNull();
+    expect(selectPrimaryQuotaWindowForUpstream({ kind: 'custom', codex_quota: { 'chatgpt-plus': codexQuota } })).toBeNull();
   });
 
   it('uses only the premium active-limit bucket for quota windows', () => {
-    const windows = computeWindowsForUpstream({
+    const window = selectPrimaryQuotaWindowForUpstream({
       kind: 'codex',
       codex_quota: {
         enterprise: {
           observed_at: '2026-06-21T00:01:00.000Z',
           active_limit: 'enterprise',
-          secondary_used_percent: 20,
-          secondary_window_minutes: 10080,
-          secondary_reset_after_at: '2026-06-28T00:00:00.000Z',
+          primary_used_percent: 20,
+          primary_window_minutes: 10080,
+          primary_reset_after_at: '2026-06-28T00:00:00.000Z',
         },
         premium: {
           observed_at: '2026-06-21T00:00:00.000Z',
           active_limit: 'premium',
-          primary_used_percent: 10,
-          primary_window_minutes: 300,
-          primary_reset_after_at: '2026-06-21T05:00:00.000Z',
-          secondary_used_percent: 30,
-          secondary_window_minutes: 10080,
-          secondary_reset_after_at: '2026-06-28T02:00:00.000Z',
+          primary_used_percent: 30,
+          primary_window_minutes: 10080,
+          primary_reset_after_at: '2026-06-28T02:00:00.000Z',
         },
       },
     });
 
-    expect(windows).toEqual([
-      expect.objectContaining({ label: 'Primary window', quotaBucketKey: 'premium', quotaActiveLimit: 'premium' }),
-      expect.objectContaining({ label: 'Secondary window', quotaBucketKey: 'premium', upstreamPercent: 30 }),
-    ]);
-    expect(selectSecondaryQuotaWindowForUpstream({ kind: 'codex', codex_quota: { enterprise: {
+    expect(window).toEqual(expect.objectContaining({
+      label: 'Primary window',
+      quotaBucketKey: 'premium',
+      quotaActiveLimit: 'premium',
+      upstreamPercent: 30,
+    }));
+    expect(selectPrimaryQuotaWindowForUpstream({ kind: 'codex', codex_quota: { enterprise: {
       observed_at: '2026-06-21T00:01:00.000Z',
       active_limit: 'enterprise',
-      secondary_used_percent: 20,
-      secondary_window_minutes: 10080,
-      secondary_reset_after_at: '2026-06-28T00:00:00.000Z',
+      primary_used_percent: 20,
+      primary_window_minutes: 10080,
+      primary_reset_after_at: '2026-06-28T00:00:00.000Z',
     } } })).toBeNull();
   });
 
-  it('matches premium active-limit snapshots with normalized names and legacy keys', () => {
-    expect(selectSecondaryQuotaWindowForUpstream({ kind: 'codex', codex_quota: { 'chatgpt-plus': {
+  it('matches premium snapshots with normalized active-limit and map-key names', () => {
+    expect(selectPrimaryQuotaWindowForUpstream({ kind: 'codex', codex_quota: { 'chatgpt-plus': {
       observed_at: '2026-06-21T00:00:00.000Z',
       active_limit: ' Premium ',
-      secondary_used_percent: 44,
-      secondary_window_minutes: 10080,
-      secondary_reset_after_at: '2026-06-28T00:00:00.000Z',
+      primary_used_percent: 44,
+      primary_window_minutes: 10080,
+      primary_reset_after_at: '2026-06-28T00:00:00.000Z',
     } } })).toMatchObject({ quotaBucketKey: 'chatgpt-plus', upstreamPercent: 44 });
-    expect(selectSecondaryQuotaWindowForUpstream({ kind: 'codex', codex_quota: { premium: {
+    expect(selectPrimaryQuotaWindowForUpstream({ kind: 'codex', codex_quota: { premium: {
       observed_at: '2026-06-21T00:00:00.000Z',
-      secondary_used_percent: 55,
-      secondary_window_minutes: 10080,
-      secondary_reset_after_at: '2026-06-28T00:00:00.000Z',
+      primary_used_percent: 55,
+      primary_window_minutes: 10080,
+      primary_reset_after_at: '2026-06-28T00:00:00.000Z',
     } } })).toMatchObject({ quotaBucketKey: 'premium', upstreamPercent: 55 });
   });
 });
@@ -318,7 +308,7 @@ describe('usage leaderboard', () => {
 });
 
 describe('usage quota estimate', () => {
-  it('infers user used percent from token share and upstream secondary used percent', () => {
+  it('infers user used percent from token share and upstream primary used percent', () => {
     const snapshot: SanitizedExportSnapshot = {
       exportedAt: '2026-06-22T00:00:00.000Z',
       users: [
@@ -337,7 +327,7 @@ describe('usage quota estimate', () => {
     };
 
     const report = summarizeUsageQuotaEstimate(7, 'up1', {
-      label: 'Secondary window',
+      label: 'Primary window',
       startAt: '2026-06-21T00:00:00.000Z',
       endAt: '2026-06-22T00:00:00.000Z',
       startHour: '2026-06-21T00',

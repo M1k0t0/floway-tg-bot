@@ -8,7 +8,7 @@ import {
   formatQuotaEstimateInsufficient,
   formatQuotaEstimateNotification,
   formatQuotaEstimateVerbose,
-  formatSecondaryWindowNotification,
+  formatPrimaryWindowNotification,
   formatStartHelp,
   formatUpstreamList,
   formatUsageLeaderboard,
@@ -105,7 +105,7 @@ describe('formatters', () => {
     };
     const report: UsageQuotaEstimate = {
       window: {
-        label: 'Secondary window',
+        label: 'Primary window',
         startAt: '2026-06-15T00:00:00.000Z',
         endAt: '2026-06-22T00:00:00.000Z',
         startHour: '2026-06-15T00',
@@ -125,7 +125,7 @@ describe('formatters', () => {
     expect(text).toContain('<b>Quota estimate</b>\n\n<b>Codex &lt;main&gt;&amp;</b>');
     expect(text).not.toContain('<code>up_a</code>');
     expect(text).toContain('Reset in ');
-    expect(text).toContain('<b>Upstream secondary used</b>:\n[||||||||||||   ] <b>80.0%</b>');
+    expect(text).toContain('<b>Upstream primary used</b>:\n[||||||||||||   ] <b>80.0%</b>');
     expect(text).toContain('<b>Estimated your used</b>:\n[||||||||||||   ] <b>80.0%</b> of your equal share');
     expect(text).toContain('(Assumed 4 users)');
     expect(text).toContain('Actual per-user quota pressure depends on every upstream user');
@@ -151,7 +151,7 @@ describe('formatters', () => {
     };
     const report: UsageQuotaEstimate = {
       window: {
-        label: 'Secondary window',
+        label: 'Primary window',
         startAt: '2026-06-15T00:00:00.000Z',
         endAt: '2026-06-22T00:00:00.000Z',
         startHour: '2026-06-15T00',
@@ -177,7 +177,7 @@ describe('formatters', () => {
   it('formats notification quota estimates without the command header or caveat', () => {
     const report: UsageQuotaEstimate = {
       window: {
-        label: 'Secondary window',
+        label: 'Primary window',
         startAt: '2026-06-15T00:00:00.000Z',
         endAt: '2026-06-22T00:00:00.000Z',
         startHour: '2026-06-15T00',
@@ -196,7 +196,7 @@ describe('formatters', () => {
 
     const text = formatQuotaEstimateNotification(report);
 
-    expect(text).toContain('<b>Upstream secondary used</b>:\n[|||            ] <b>18.0%</b>');
+    expect(text).toContain('<b>Upstream primary used</b>:\n[|||            ] <b>18.0%</b>');
     expect(text).toContain('<b>Estimated your used</b>:');
     expect(text).toContain('(Assumed 4 users)');
     expect(text).not.toContain('<b>Active limit</b>');
@@ -224,7 +224,7 @@ describe('formatters', () => {
     const text = formatQuotaEstimateInsufficient(
       upstream,
       {
-        label: 'Secondary window',
+        label: 'Primary window',
         startAt: '2026-06-15T00:00:00.000Z',
         endAt: '2026-06-22T00:00:00.000Z',
         startHour: '2026-06-15T00',
@@ -232,7 +232,7 @@ describe('formatters', () => {
       },
       0.4,
     );
-    expect(text).toContain('<b>Upstream secondary used</b>:\n[|              ] <b>0.40%</b>');
+    expect(text).toContain('<b>Upstream primary used</b>:\n[|              ] <b>0.40%</b>');
     expect(text).toContain('Not enough usage data yet. The limit probably just reset, so go make some requests.');
   });
 
@@ -272,7 +272,7 @@ describe('formatters', () => {
     expect(text).not.toContain('tokens | $');
   });
 
-  it('formats secondary window refresh notifications', () => {
+  it('formats primary window refresh notifications', () => {
     const upstream: UpstreamRecord = {
       id: 'up_a',
       kind: 'codex',
@@ -289,7 +289,7 @@ describe('formatters', () => {
     };
     const report: UsageWindowReport = {
       window: {
-        label: 'Secondary window',
+        label: 'Primary window',
         startAt: '2026-06-15T00:00:00.000Z',
         endAt: '2026-06-22T00:00:00.000Z',
         startHour: '2026-06-15T00',
@@ -302,9 +302,9 @@ describe('formatters', () => {
       userRequestSharePercent: 25,
     };
 
-    const text = formatSecondaryWindowNotification(upstream, report, '<b>Quota estimate</b>');
+    const text = formatPrimaryWindowNotification(upstream, report, '<b>Quota estimate</b>');
 
-    expect(text).toContain('<b>Secondary window refreshed</b>');
+    expect(text).toContain('<b>Primary window refreshed</b>');
     expect(text).toContain('<b>Codex &lt;main&gt;&amp;</b> <code>up_a</code>');
     expect(text).toContain('<b>Your upstream tokens</b>: <b>100</b>');
     expect(text).toContain('<b>Requests</b>: <b>1</b> / 4');
@@ -312,7 +312,7 @@ describe('formatters', () => {
     expect(text).toContain('\n\n<b>Quota estimate</b>');
     expect(text).not.toContain('<b>Window note</b>');
 
-    const noted = formatSecondaryWindowNotification(upstream, report, '<b>Quota estimate</b>', 'Manual <refresh>&');
+    const noted = formatPrimaryWindowNotification(upstream, report, '<b>Quota estimate</b>', 'Manual <refresh>&');
     expect(noted).toContain('<b>Window note</b>: Manual &lt;refresh&gt;&amp;');
   });
 });

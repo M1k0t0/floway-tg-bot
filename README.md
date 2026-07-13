@@ -1,7 +1,7 @@
 # Floway Telegram Bot
 
 Telegram bot for Floway users to bind their Floway account, manage their own
-API keys, inspect upstreams, and view Codex primary/secondary-window usage.
+API keys, inspect upstreams, and view Codex primary-window usage.
 
 ## Setup
 
@@ -50,8 +50,8 @@ is `premium`. Other active-limit snapshots are intentionally ignored so usage
 and notification boundaries stay stable.
 
 The bot also polls available upstreams and sends bound users a private summary
-when an upstream's Codex secondary window advances. Tune the poll interval with
-`SECONDARY_WINDOW_NOTIFY_INTERVAL_SECONDS`.
+when an upstream's Codex primary window advances. Tune the poll interval with
+`PRIMARY_WINDOW_NOTIFY_INTERVAL_SECONDS`.
 
 ## Bind Deep Links
 

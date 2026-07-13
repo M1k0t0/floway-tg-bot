@@ -27,7 +27,7 @@
 `floway-tg-bot` is a Telegram bot for Floway users. It lets a Telegram user
 bind a Floway account, manage that user's Floway API keys, inspect allowed
 upstreams, view usage/quota details, view leaderboard summaries, and receive
-private secondary-window refresh notifications.
+private primary-window refresh notifications.
 
 Stack: TypeScript, Node.js, Telegraf, `node:sqlite`, pnpm, Vitest, ESLint.
 The production runtime is a long-running Node process. `dist/` is generated
@@ -48,10 +48,10 @@ floway-tg-bot/
 │   ├── bot.ts                      # Telegram command registration and command handlers
 │   ├── config.ts                   # environment parsing and defaults
 │   ├── floway-client.ts            # Floway HTTP client and response validation
-│   ├── db.ts                       # SQLite binding, key, secondary-window state stores
+│   ├── db.ts                       # SQLite binding, key, primary-window state stores
 │   ├── usage.ts                    # usage aggregation, windows, quota estimate calculations
 │   ├── format.ts                   # Telegram HTML formatting helpers
-│   ├── secondary-window-notifier.ts # upstream secondary-window polling and notification logic
+│   ├── primary-window-notifier.ts # upstream primary-window polling and notification logic
 │   ├── deeplink.ts                 # Telegram /start bind payload helpers
 │   ├── make-bind-link.ts           # CLI for bind links
 │   └── types.ts                    # shared Floway and bot types
@@ -76,18 +76,18 @@ When adding or changing commands:
 - Preserve Floway upstream access checks. A bound user must not see upstreams
   outside their Floway `upstreamIds` restriction.
 
-## Secondary Window Notifications
+## Primary Window Notifications
 
-`src/secondary-window-notifier.ts` polls available upstreams and sends each
-eligible bound user a private notification when a usable upstream's secondary
+`src/primary-window-notifier.ts` polls available upstreams and sends each
+eligible bound user a private notification when a usable upstream's primary
 window advances.
 
 Important invariants:
 
-- Compare window start/end boundaries with a five-hour debounce for routing
-  decisions; Floway timestamps can drift by seconds, milliseconds, or a few
-  hours. Preserve exact `startAt`/`endAt` values for display, storage, and usage
-  summarization.
+- Compare window start/end boundaries with a five-hour routing debounce;
+  this tolerance is independent of the primary window's duration. Floway
+  timestamps can drift by seconds, milliseconds, or a few hours. Preserve exact
+  `startAt`/`endAt` values for display, storage, and usage summarization.
 - Treat a new window that starts inside the stored window and extends past it
   as an upstream early/manual refresh. Report the stored window truncated at
   the new start and include an explicit notification note.
@@ -111,7 +111,7 @@ FLOWAY_ADMIN_KEY=
 BOT_DB_PATH=./data/bot.sqlite
 BOT_SECRET_KEY=
 USAGE_EXPORT_CACHE_TTL_SECONDS=30
-SECONDARY_WINDOW_NOTIFY_INTERVAL_SECONDS=300
+PRIMARY_WINDOW_NOTIFY_INTERVAL_SECONDS=300
 ```
 
 Generate `BOT_SECRET_KEY` with `openssl rand -base64 32`. Floway sessions are
@@ -138,7 +138,7 @@ For targeted work, prefer focused commands first, then broaden before
 completion when the change has shared behavior:
 
 ```bash
-./node_modules/.bin/vitest run test/secondary-window-notifier.test.ts --maxWorkers=1 --no-file-parallelism
+./node_modules/.bin/vitest run test/primary-window-notifier.test.ts --maxWorkers=1 --no-file-parallelism
 ./node_modules/.bin/vitest run test/format.test.ts --maxWorkers=1 --no-file-parallelism
 ./node_modules/.bin/tsc --noEmit -p tsconfig.json --pretty false
 ./node_modules/.bin/tsc -p tsconfig.build.json --pretty false
@@ -156,5 +156,5 @@ process manager such as systemd.
 Do not deploy, restart, or stop the production bot unless the user explicitly
 asks. When deployment is requested, announce that the restart/deploy is
 starting, build first, preserve `.env` and `BOT_DB_PATH`, and let shutdown
-complete so the secondary-window notifier finishes any active poll before the
+complete so the primary-window notifier finishes any active poll before the
 SQLite store is closed.

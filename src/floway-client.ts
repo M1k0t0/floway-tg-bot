@@ -133,7 +133,7 @@ export class FlowayClient {
         upstream: record.upstream,
         modelKey: record.modelKey,
         hour: record.hour,
-        pricingSelector: structuredClone(record.pricingSelector),
+        pricingSelector: { ...record.pricingSelector },
         requests: record.requests,
         metrics: record.metrics.map(metric => ({ ...metric })),
       })),

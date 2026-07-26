@@ -1,7 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { randomBytes } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { Telegram } from 'telegraf';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   BOT_COMMANDS,
+  createBot,
   TEST_PRIMARY_WINDOW_COMMAND,
   canShareUpstreamQuota,
   filterUpstreamsForUser,
@@ -10,7 +17,9 @@ import {
   parseQuotaArgs,
   selectUpstream,
 } from '../src/bot.js';
-import type { UpstreamRecord } from '../src/types.js';
+import { BindingStore } from '../src/db.js';
+import type { FlowayClient } from '../src/floway-client.js';
+import type { AppConfig, UpstreamRecord } from '../src/types.js';
 
 const upstream = (id: string): UpstreamRecord => ({
   id,
@@ -33,6 +42,81 @@ const upstream = (id: string): UpstreamRecord => ({
 describe('bot commands', () => {
   it('keeps the primary window test command hidden from the Telegram command list', () => {
     expect(BOT_COMMANDS.map(command => command.command)).not.toContain(TEST_PRIMARY_WINDOW_COMMAND);
+  });
+
+  it('loads the full record before invoking the unified upstream model action', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'floway-bot-command-'));
+    const store = new BindingStore(join(dir, 'bot.sqlite'), randomBytes(32));
+    const listed = upstream('up_a');
+    const full = {
+      ...listed,
+      config: { apiKey: 'provider-secret' },
+      state: { accessToken: 'state-secret' },
+    };
+    const getUpstreamModels = vi.fn().mockResolvedValue({ data: [] });
+    const floway = {
+      getMe: vi.fn().mockResolvedValue({
+        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
+        viaApiKey: false,
+        apiKey: null,
+      }),
+      listUpstreams: vi.fn().mockResolvedValue([listed]),
+      getUpstream: vi.fn().mockResolvedValue(full),
+      getUpstreamModels,
+      getCopilotQuota: vi.fn(),
+    } as unknown as FlowayClient;
+    const config = {
+      telegramBotToken: '123:test',
+      flowayBaseUrl: 'https://floway.example',
+      flowayAdminKey: 'admin-secret',
+      botDbPath: join(dir, 'bot.sqlite'),
+      botSecretKey: randomBytes(32),
+      usageExportCacheTtlSeconds: 30,
+      primaryWindowNotifyIntervalSeconds: 300,
+    } satisfies AppConfig;
+    store.upsert({
+      telegramUserId: '42',
+      flowayUserId: 7,
+      username: 'alice',
+      flowaySession: 'user-session',
+    });
+    const bot = createBot(config, store, floway);
+    bot.botInfo = {
+      id: 123,
+      is_bot: true,
+      first_name: 'Floway',
+      username: 'floway_test_bot',
+      can_join_groups: true,
+      can_read_all_group_messages: false,
+      supports_inline_queries: false,
+    };
+    const callApi = vi.spyOn(Telegram.prototype, 'callApi').mockResolvedValue({} as never);
+
+    try {
+      await bot.handleUpdate({
+        update_id: 1,
+        message: {
+          message_id: 1,
+          date: 0,
+          chat: { id: 42, type: 'private', first_name: 'Alice' },
+          from: { id: 42, is_bot: false, first_name: 'Alice' },
+          text: '/upstream up_a',
+          entities: [{ offset: 0, length: 9, type: 'bot_command' }],
+        },
+      });
+
+      expect(floway.getUpstream).toHaveBeenCalledWith('up_a');
+      expect(getUpstreamModels).toHaveBeenCalledWith(full);
+      expect(floway.getCopilotQuota).not.toHaveBeenCalled();
+      const reply = callApi.mock.calls.find(([method]) => method === 'sendMessage');
+      expect(reply?.[1]).toMatchObject({ text: expect.stringContaining('Models (0)') });
+      expect(JSON.stringify(reply?.[1])).not.toContain('provider-secret');
+      expect(JSON.stringify(reply?.[1])).not.toContain('state-secret');
+    } finally {
+      callApi.mockRestore();
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

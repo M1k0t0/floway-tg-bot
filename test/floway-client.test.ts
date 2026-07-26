@@ -1,6 +1,25 @@
 import { describe, expect, it } from 'vitest';
 
 import { FlowayClient, FlowayHttpError } from '../src/floway-client.js';
+import type { UpstreamRecord } from '../src/types.js';
+
+const upstream = (id: string, kind = 'copilot'): UpstreamRecord => ({
+  id,
+  kind,
+  name: id,
+  enabled: true,
+  sort_order: 0,
+  created_at: '2026-06-21T00:00:00.000Z',
+  updated_at: '2026-06-21T00:00:00.000Z',
+  flag_overrides: {},
+  flag_defaults: {},
+  disabled_public_model_ids: [],
+  proxy_fallback_list: [],
+  model_prefix: null,
+  color: null,
+  config: { githubToken: 'github-secret' },
+  state: { copilotToken: 'copilot-secret' },
+});
 
 const jsonResponse = (body: unknown, init: ResponseInit = {}): Response =>
   new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' }, ...init });
@@ -106,6 +125,68 @@ describe('FlowayClient', () => {
       requests: 1,
       metrics: [{ metric: 'input_tokens', quantity: '10', unitPrice: '0.000001' }],
     });
+  });
+
+  it('fetches a full upstream record and posts it to model and Copilot quota actions', async () => {
+    const record = upstream('up one');
+    const calls: Array<{ url: string; method?: string; headers: Headers; body?: string }> = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input);
+      calls.push({
+        url,
+        ...(init?.method !== undefined ? { method: init.method } : {}),
+        headers: new Headers(init?.headers),
+        ...(init?.body != null ? { body: init.body.toString() } : {}),
+      });
+      if (url.endsWith('/auth/login')) {
+        return jsonResponse({ token: 'admin-session', user: { id: 1, username: 'admin', isAdmin: true, upstreamIds: null } });
+      }
+      if (url.endsWith('/api/upstreams/up%20one')) return jsonResponse(record);
+      if (url.endsWith('/api/upstreams/list-models')) return jsonResponse({ data: [] });
+      if (url.endsWith('/api/upstreams/copilot/quota')) return jsonResponse({ quota_reset_date: '2026-07-01' });
+      return jsonResponse({ error: 'not found' }, { status: 404 });
+    };
+    const client = new FlowayClient({
+      baseUrl: 'https://floway.example',
+      adminKey: 'admin-secret',
+      usageExportCacheTtlSeconds: 30,
+      fetchImpl,
+    });
+
+    const fullRecord = await client.getUpstream('up one');
+    await client.getUpstreamModels(fullRecord);
+    await client.getCopilotQuota(fullRecord);
+
+    const actionCalls = calls.filter(call => !call.url.endsWith('/auth/login'));
+    expect(actionCalls.map(call => ({
+      url: call.url,
+      method: call.method,
+      body: call.body,
+      session: call.headers.get('x-floway-session'),
+      contentType: call.headers.get('content-type'),
+    }))).toEqual([
+      {
+        url: 'https://floway.example/api/upstreams/up%20one',
+        method: 'GET',
+        body: undefined,
+        session: 'admin-session',
+        contentType: null,
+      },
+      {
+        url: 'https://floway.example/api/upstreams/list-models',
+        method: 'POST',
+        body: JSON.stringify({ record }),
+        session: 'admin-session',
+        contentType: 'application/json',
+      },
+      {
+        url: 'https://floway.example/api/upstreams/copilot/quota',
+        method: 'POST',
+        body: JSON.stringify({ record }),
+        session: 'admin-session',
+        contentType: 'application/json',
+      },
+    ]);
   });
 
   it('sends an empty JSON object when rotating a generated key', async () => {

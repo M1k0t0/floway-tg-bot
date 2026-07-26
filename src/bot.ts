@@ -153,11 +153,11 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
         await replyLong(ctx, selection.message);
         return;
       }
-      const upstream = selection.upstream;
+      const upstream = await floway.getUpstream(selection.upstream.id);
       const [models, copilotQuota] = await Promise.all([
-        floway.getUpstreamModels(upstream.id),
+        floway.getUpstreamModels(upstream),
         upstream.kind === 'copilot'
-          ? floway.getCopilotQuota(upstream.id).catch(error => ({ error: error instanceof Error ? error.message : String(error) }))
+          ? floway.getCopilotQuota(upstream).catch(error => ({ error: error instanceof Error ? error.message : String(error) }))
           : Promise.resolve(null),
       ]);
       await replyLong(ctx, formatUpstreamDetail(upstream, models.data, copilotQuota));
@@ -330,10 +330,6 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
     if (!bound) return;
 
     try {
-      if (!canViewLeaderboard(bound.user)) {
-        await ctx.reply('Global telemetry access is required to view the leaderboard.');
-        return;
-      }
       const exportSnapshot = await floway.exportUsageSnapshot();
       await replyLong(ctx, formatUsageLeaderboard(summarizeUsageLeaderboard(exportSnapshot, parsed.days, 4, new Date(), bound.user.upstreamIds)));
     } catch (error) {
@@ -555,9 +551,6 @@ export const parseQuotaArgs = (args: string): { upstreamId: string; verbose: boo
   if (tokens.length > 1) return { error: 'Usage: /quota [verbose] <upstream_id>' };
   return { upstreamId: tokens[0]!, verbose: false };
 };
-
-export const canViewLeaderboard = (user: Pick<FlowayUser, 'canViewGlobalTelemetry'>): boolean =>
-  user.canViewGlobalTelemetry;
 
 export const filterUpstreamsForUser = (
   upstreams: readonly UpstreamRecord[],

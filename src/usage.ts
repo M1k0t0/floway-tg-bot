@@ -1,8 +1,8 @@
 import type {
   BillingDimension,
+  BillingMetric,
   CodexQuotaSnapshot,
   FlowayAdminUser,
-  ModelPricing,
   SanitizedExportSnapshot,
   TokenUsage,
   UpstreamRecord,
@@ -15,6 +15,7 @@ export const BILLING_DIMENSIONS: readonly BillingDimension[] = [
   'input_cache_write',
   'input_cache_write_1h',
   'input_image',
+  'input_audio',
   'output',
   'output_image',
 ];
@@ -96,34 +97,69 @@ type WindowQuotaSnapshot = Pick<
   | 'primary_reset_after_at'
 >;
 
-export const unitPriceForDimension = (pricing: ModelPricing | null, dimension: BillingDimension): number | null => {
-  if (!pricing) return null;
-  switch (dimension) {
-  case 'input':
-    return pricing.input ?? null;
-  case 'input_cache_read':
-    return pricing.input_cache_read ?? pricing.input ?? null;
-  case 'input_cache_write':
-    return pricing.input_cache_write ?? pricing.input ?? null;
-  case 'input_cache_write_1h':
-    return pricing.input_cache_write_1h ?? pricing.input_cache_write ?? pricing.input ?? null;
-  case 'input_image':
-    return pricing.input_image ?? pricing.input ?? null;
-  case 'output':
-    return pricing.output ?? null;
-  case 'output_image':
-    return pricing.output_image ?? pricing.output ?? null;
-  }
+const TOKEN_DIMENSION_BY_METRIC: Partial<Record<BillingMetric, BillingDimension>> = {
+  input_tokens: 'input',
+  input_cache_read_tokens: 'input_cache_read',
+  input_cache_write_tokens: 'input_cache_write',
+  input_cache_write_1h_tokens: 'input_cache_write_1h',
+  input_image_tokens: 'input_image',
+  input_audio_tokens: 'input_audio',
+  output_tokens: 'output',
+  output_image_tokens: 'output_image',
+};
+
+interface FixedDecimal {
+  coefficient: bigint;
+  scale: number;
+}
+
+const DECIMAL_PATTERN = /^(\d+)(?:[.](\d+))?$/;
+
+const parseDecimalString = (value: string, label: string): FixedDecimal => {
+  const match = DECIMAL_PATTERN.exec(value);
+  if (!match) throw new TypeError(`${label} must be a non-negative finite decimal string`);
+  return {
+    coefficient: BigInt(`${match[1]}${match[2] ?? ''}`),
+    scale: match[2]?.length ?? 0,
+  };
+};
+
+const decimalStringToNumber = (value: string, label: string): number => {
+  parseDecimalString(value, label);
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) throw new RangeError(`${label} exceeds the supported numeric range`);
+  return parsed;
+};
+
+const addFixedDecimals = (left: FixedDecimal, right: FixedDecimal): FixedDecimal => {
+  const scale = Math.max(left.scale, right.scale);
+  return {
+    coefficient: left.coefficient * (10n ** BigInt(scale - left.scale))
+      + right.coefficient * (10n ** BigInt(scale - right.scale)),
+    scale,
+  };
+};
+
+const fixedDecimalToNumber = ({ coefficient, scale }: FixedDecimal): number => {
+  let digits = coefficient.toString().padStart(scale + 1, '0');
+  if (scale > 0) digits = `${digits.slice(0, -scale)}.${digits.slice(-scale)}`;
+  const parsed = Number(digits);
+  if (!Number.isFinite(parsed)) throw new RangeError('usage cost exceeds the supported numeric range');
+  return parsed;
 };
 
 export const recordCostUsd = (record: UsageRecord): number => {
-  let total = 0;
-  for (const dimension of BILLING_DIMENSIONS) {
-    const tokens = record.tokens[dimension] ?? 0;
-    const unitPrice = unitPriceForDimension(record.cost, dimension);
-    if (tokens > 0 && unitPrice !== null) total += tokens * unitPrice;
+  let total: FixedDecimal = { coefficient: 0n, scale: 0 };
+  for (const row of record.metrics) {
+    if (row.unitPrice === null) continue;
+    const quantity = parseDecimalString(row.quantity, `${row.metric} quantity`);
+    const unitPrice = parseDecimalString(row.unitPrice, `${row.metric} unit price`);
+    total = addFixedDecimals(total, {
+      coefficient: quantity.coefficient * unitPrice.coefficient,
+      scale: quantity.scale + unitPrice.scale,
+    });
   }
-  return total / 1_000_000;
+  return fixedDecimalToNumber(total);
 };
 
 export const tokenTotal = (tokens: TokenUsage): number =>
@@ -143,8 +179,10 @@ export const emptyTotals = (): UsageTotals => ({ requests: 0, tokens: {}, cost: 
 export const addUsageRecord = (totals: UsageTotals, record: UsageRecord): void => {
   totals.requests += record.requests;
   totals.cost += recordCostUsd(record);
-  for (const dimension of BILLING_DIMENSIONS) {
-    const count = record.tokens[dimension] ?? 0;
+  for (const row of record.metrics) {
+    const dimension = TOKEN_DIMENSION_BY_METRIC[row.metric];
+    if (!dimension) continue;
+    const count = decimalStringToNumber(row.quantity, `${row.metric} quantity`);
     if (count > 0) totals.tokens[dimension] = (totals.tokens[dimension] ?? 0) + count;
   }
 };

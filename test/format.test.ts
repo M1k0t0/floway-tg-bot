@@ -27,8 +27,11 @@ describe('formatters', () => {
       created_at: '2026-06-21T00:00:00.000Z',
       updated_at: '2026-06-21T00:00:00.000Z',
       flag_overrides: {},
+      flag_defaults: {},
       disabled_public_model_ids: [],
       proxy_fallback_list: [],
+      model_prefix: null,
+      color: null,
       config: {},
       state: null,
     };
@@ -46,6 +49,8 @@ describe('formatters', () => {
       created_at: '2026-06-21T00:00:00.000Z',
       last_used_at: null,
       upstream_ids: ['up_a'],
+      dump_retention_seconds: null,
+      responses_retention_seconds: 0,
     };
 
     const text = formatKeys([key]);
@@ -98,8 +103,11 @@ describe('formatters', () => {
       created_at: '2026-06-21T00:00:00.000Z',
       updated_at: '2026-06-21T00:00:00.000Z',
       flag_overrides: {},
+      flag_defaults: {},
       disabled_public_model_ids: [],
       proxy_fallback_list: [],
+      model_prefix: null,
+      color: null,
       config: {},
       state: null,
     };
@@ -144,8 +152,11 @@ describe('formatters', () => {
       created_at: '2026-06-21T00:00:00.000Z',
       updated_at: '2026-06-21T00:00:00.000Z',
       flag_overrides: {},
+      flag_defaults: {},
       disabled_public_model_ids: [],
       proxy_fallback_list: [],
+      model_prefix: null,
+      color: null,
       config: {},
       state: null,
     };
@@ -215,8 +226,11 @@ describe('formatters', () => {
       created_at: '2026-06-21T00:00:00.000Z',
       updated_at: '2026-06-21T00:00:00.000Z',
       flag_overrides: {},
+      flag_defaults: {},
       disabled_public_model_ids: [],
       proxy_fallback_list: [],
+      model_prefix: null,
+      color: null,
       config: {},
       state: null,
     };
@@ -282,8 +296,11 @@ describe('formatters', () => {
       created_at: '2026-06-21T00:00:00.000Z',
       updated_at: '2026-06-21T00:00:00.000Z',
       flag_overrides: {},
+      flag_defaults: {},
       disabled_public_model_ids: [],
       proxy_fallback_list: [],
+      model_prefix: null,
+      color: null,
       config: {},
       state: null,
     };

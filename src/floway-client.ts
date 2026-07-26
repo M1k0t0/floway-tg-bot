@@ -76,19 +76,32 @@ export class FlowayClient {
   }
 
   async rotateKey(session: string, id: string): Promise<ApiKeyRecord> {
-    return await this.userRequest<ApiKeyRecord>(session, `/api/keys/${encodeURIComponent(id)}/rotate`, { method: 'POST' });
+    return await this.userRequest<ApiKeyRecord>(session, `/api/keys/${encodeURIComponent(id)}/rotate`, {
+      method: 'POST',
+      body: {},
+    });
   }
 
   async listUpstreams(): Promise<UpstreamRecord[]> {
     return await this.adminRequest<UpstreamRecord[]>('/api/upstreams');
   }
 
-  async getUpstreamModels(id: string): Promise<UpstreamModelsResponse> {
-    return await this.adminRequest<UpstreamModelsResponse>(`/api/upstreams/${encodeURIComponent(id)}/models`);
+  async getUpstream(id: string): Promise<UpstreamRecord> {
+    return await this.adminRequest<UpstreamRecord>(`/api/upstreams/${encodeURIComponent(id)}`);
   }
 
-  async getCopilotQuota(id: string): Promise<CopilotQuotaResponse> {
-    return await this.adminRequest<CopilotQuotaResponse>(`/api/upstreams/${encodeURIComponent(id)}/copilot/quota`);
+  async getUpstreamModels(record: UpstreamRecord): Promise<UpstreamModelsResponse> {
+    return await this.adminRequest<UpstreamModelsResponse>('/api/upstreams/list-models', {
+      method: 'POST',
+      body: { record },
+    });
+  }
+
+  async getCopilotQuota(record: UpstreamRecord): Promise<CopilotQuotaResponse> {
+    return await this.adminRequest<CopilotQuotaResponse>('/api/upstreams/copilot/quota', {
+      method: 'POST',
+      body: { record },
+    });
   }
 
   async getTokenUsage(session: string, start: string, end: string): Promise<TokenUsageResponse> {
@@ -113,16 +126,26 @@ export class FlowayClient {
         username: user.username,
         deletedAt: user.deletedAt,
       })),
-      apiKeys: payload.data.apiKeys.map(({ key: _key, ...rest }) => rest),
+      apiKeys: payload.data.apiKeys.map(apiKey => ({
+        id: apiKey.id,
+        userId: apiKey.userId,
+        name: apiKey.name,
+        createdAt: apiKey.createdAt,
+        ...(apiKey.lastUsedAt !== undefined ? { lastUsedAt: apiKey.lastUsedAt } : {}),
+        upstreamIds: apiKey.upstreamIds,
+        deletedAt: apiKey.deletedAt,
+        dumpRetentionSeconds: apiKey.dumpRetentionSeconds,
+        responsesRetentionSeconds: apiKey.responsesRetentionSeconds,
+      })),
       usage: payload.data.usage.map(record => ({
         keyId: record.keyId,
         model: record.model,
         upstream: record.upstream,
         modelKey: record.modelKey,
         hour: record.hour,
+        pricingSelector: { ...record.pricingSelector },
         requests: record.requests,
-        tokens: { ...record.tokens },
-        cost: record.cost ? { ...record.cost } : null,
+        metrics: record.metrics.map(metric => ({ ...metric })),
       })),
     };
     this.exportCache = {

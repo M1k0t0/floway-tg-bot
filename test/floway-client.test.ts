@@ -113,9 +113,9 @@ describe('FlowayClient', () => {
     const fetchImpl: typeof fetch = async (input, init) => {
       calls.push({
         url: String(input),
-        method: init?.method,
+        ...(init?.method !== undefined ? { method: init.method } : {}),
         headers: new Headers(init?.headers),
-        ...(init?.body !== undefined ? { body: init.body.toString() } : {}),
+        ...(init?.body != null ? { body: init.body.toString() } : {}),
       });
       return jsonResponse({
         id: 'key_1',

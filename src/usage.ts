@@ -108,23 +108,58 @@ const TOKEN_DIMENSION_BY_METRIC: Partial<Record<BillingMetric, BillingDimension>
   output_image_tokens: 'output_image',
 };
 
+interface FixedDecimal {
+  coefficient: bigint;
+  scale: number;
+}
+
+const DECIMAL_PATTERN = /^(\d+)(?:[.](\d+))?$/;
+
+const parseDecimalString = (value: string, label: string): FixedDecimal => {
+  const match = DECIMAL_PATTERN.exec(value);
+  if (!match) throw new TypeError(`${label} must be a non-negative finite decimal string`);
+  return {
+    coefficient: BigInt(`${match[1]}${match[2] ?? ''}`),
+    scale: match[2]?.length ?? 0,
+  };
+};
+
 const decimalStringToNumber = (value: string, label: string): number => {
+  parseDecimalString(value, label);
   const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    throw new TypeError(`${label} must be a non-negative finite decimal string`);
-  }
+  if (!Number.isFinite(parsed)) throw new RangeError(`${label} exceeds the supported numeric range`);
+  return parsed;
+};
+
+const addFixedDecimals = (left: FixedDecimal, right: FixedDecimal): FixedDecimal => {
+  const scale = Math.max(left.scale, right.scale);
+  return {
+    coefficient: left.coefficient * (10n ** BigInt(scale - left.scale))
+      + right.coefficient * (10n ** BigInt(scale - right.scale)),
+    scale,
+  };
+};
+
+const fixedDecimalToNumber = ({ coefficient, scale }: FixedDecimal): number => {
+  let digits = coefficient.toString().padStart(scale + 1, '0');
+  if (scale > 0) digits = `${digits.slice(0, -scale)}.${digits.slice(-scale)}`;
+  const parsed = Number(digits);
+  if (!Number.isFinite(parsed)) throw new RangeError('usage cost exceeds the supported numeric range');
   return parsed;
 };
 
 export const recordCostUsd = (record: UsageRecord): number => {
-  let total = 0;
+  let total: FixedDecimal = { coefficient: 0n, scale: 0 };
   for (const row of record.metrics) {
     if (row.unitPrice === null) continue;
-    const quantity = decimalStringToNumber(row.quantity, `${row.metric} quantity`);
-    const unitPrice = decimalStringToNumber(row.unitPrice, `${row.metric} unit price`);
-    total += quantity * unitPrice;
+    const quantity = parseDecimalString(row.quantity, `${row.metric} quantity`);
+    const unitPrice = parseDecimalString(row.unitPrice, `${row.metric} unit price`);
+    total = addFixedDecimals(total, {
+      coefficient: quantity.coefficient * unitPrice.coefficient,
+      scale: quantity.scale + unitPrice.scale,
+    });
   }
-  return total;
+  return fixedDecimalToNumber(total);
 };
 
 export const tokenTotal = (tokens: TokenUsage): number =>

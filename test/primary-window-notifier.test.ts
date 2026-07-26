@@ -40,25 +40,25 @@ describe('PrimaryWindowNotifier', () => {
         { id: 8, username: 'bob', deletedAt: null },
       ],
       apiKeys: [
-        { id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null },
-        { id: 'key_b', userId: 8, name: 'Bob key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null },
+        { id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null, dumpRetentionSeconds: null, responsesRetentionSeconds: 0 },
+        { id: 'key_b', userId: 8, name: 'Bob key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null, dumpRetentionSeconds: null, responsesRetentionSeconds: 0 },
       ],
       usage: [
-        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-21T12', requests: 2, tokens: { input: 100 }, cost: { input: 1 } },
-        { keyId: 'key_a', model: 'm', upstream: 'up_b', modelKey: 'm', hour: '2026-06-21T12', requests: 9, tokens: { input: 999 }, cost: { input: 1 } },
-        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-22T00', requests: 1, tokens: { input: 50 }, cost: { input: 1 } },
-        { keyId: 'key_b', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-22T00', requests: 3, tokens: { input: 150 }, cost: { input: 1 } },
+        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-21T12', requests: 2, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '100', unitPrice: '0.000001' }] },
+        { keyId: 'key_a', model: 'm', upstream: 'up_b', modelKey: 'm', hour: '2026-06-21T12', requests: 9, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '999', unitPrice: '0.000001' }] },
+        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-22T00', requests: 1, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '50', unitPrice: '0.000001' }] },
+        { keyId: 'key_b', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-22T00', requests: 3, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '150', unitPrice: '0.000001' }] },
       ],
     };
     const floway = {
       listUpstreams: async () => [currentUpstream],
       listUsers: async () => [
-        { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
-        { id: 8, username: 'bob', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: null, createdAt: '2026-06-15T00:00:00.000Z' },
-        { id: 9, username: 'admin', isAdmin: true, canViewGlobalTelemetry: true, upstreamIds: null, createdAt: '2026-06-15T00:00:00.000Z' },
+        { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
+        { id: 8, username: 'bob', isAdmin: false, upstreamIds: null, createdAt: '2026-06-15T00:00:00.000Z' },
+        { id: 9, username: 'admin', isAdmin: true, upstreamIds: null, createdAt: '2026-06-15T00:00:00.000Z' },
       ],
       getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
+        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
         viaApiKey: false,
         apiKey: null,
       }),
@@ -134,7 +134,7 @@ describe('PrimaryWindowNotifier', () => {
         listUpstreams: async () => [upstreamWithPrimaryReset('2026-06-22T00:00:00.000Z', 12)],
         listUsers: async () => [],
         getMe: async () => ({
-          user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
+          user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
           viaApiKey: false,
           apiKey: null,
         }),
@@ -199,7 +199,7 @@ describe('PrimaryWindowNotifier', () => {
       listUpstreams: async () => [currentUpstream],
       listUsers: async () => [],
       getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
+        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
         viaApiKey: false,
         apiKey: null,
       }),
@@ -264,24 +264,24 @@ describe('PrimaryWindowNotifier', () => {
         { id: 8, username: 'bob', deletedAt: null },
       ],
       apiKeys: [
-        { id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null },
-        { id: 'key_b', userId: 8, name: 'Bob key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null },
+        { id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null, dumpRetentionSeconds: null, responsesRetentionSeconds: 0 },
+        { id: 'key_b', userId: 8, name: 'Bob key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null, dumpRetentionSeconds: null, responsesRetentionSeconds: 0 },
       ],
       usage: [
-        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-21T12', requests: 4, tokens: { input: 200 }, cost: { input: 1 } },
-        { keyId: 'key_b', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-21T12', requests: 6, tokens: { input: 300 }, cost: { input: 1 } },
-        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-22T00', requests: 2, tokens: { input: 60 }, cost: { input: 1 } },
-        { keyId: 'key_b', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-22T00', requests: 1, tokens: { input: 40 }, cost: { input: 1 } },
+        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-21T12', requests: 4, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '200', unitPrice: '0.000001' }] },
+        { keyId: 'key_b', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-21T12', requests: 6, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '300', unitPrice: '0.000001' }] },
+        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-22T00', requests: 2, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '60', unitPrice: '0.000001' }] },
+        { keyId: 'key_b', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-22T00', requests: 1, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '40', unitPrice: '0.000001' }] },
       ],
     };
     const floway = {
       listUpstreams: async () => [currentUpstream],
       listUsers: async () => [
-        { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
-        { id: 8, username: 'bob', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: null, createdAt: '2026-06-15T00:00:00.000Z' },
+        { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
+        { id: 8, username: 'bob', isAdmin: false, upstreamIds: null, createdAt: '2026-06-15T00:00:00.000Z' },
       ],
       getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
+        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
         viaApiKey: false,
         apiKey: null,
       }),
@@ -332,18 +332,18 @@ describe('PrimaryWindowNotifier', () => {
     const snapshot: SanitizedExportSnapshot = {
       exportedAt: '2026-06-23T00:05:00.000Z',
       users: [{ id: 7, username: 'alice', deletedAt: null }],
-      apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null }],
+      apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null, dumpRetentionSeconds: null, responsesRetentionSeconds: 0 }],
       usage: [
-        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-21T12', requests: 4, tokens: { input: 200 }, cost: { input: 1 } },
+        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-21T12', requests: 4, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '200', unitPrice: '0.000001' }] },
       ],
     };
     const floway = {
       listUpstreams: async () => [currentUpstream],
       listUsers: async () => [
-        { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
+        { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
       ],
       getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
+        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
         viaApiKey: false,
         apiKey: null,
       }),
@@ -399,18 +399,18 @@ describe('PrimaryWindowNotifier', () => {
     const snapshot: SanitizedExportSnapshot = {
       exportedAt: '2026-06-23T00:05:00.000Z',
       users: [{ id: 7, username: 'alice', deletedAt: null }],
-      apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null }],
+      apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null, dumpRetentionSeconds: null, responsesRetentionSeconds: 0 }],
       usage: [
-        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-21T12', requests: 4, tokens: { input: 200 }, cost: { input: 1 } },
+        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-21T12', requests: 4, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '200', unitPrice: '0.000001' }] },
       ],
     };
     const floway = {
       listUpstreams: async () => [currentUpstream],
       listUsers: async () => [
-        { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
+        { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
       ],
       getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
+        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
         viaApiKey: false,
         apiKey: null,
       }),
@@ -470,18 +470,18 @@ describe('PrimaryWindowNotifier', () => {
     const snapshot: SanitizedExportSnapshot = {
       exportedAt: '2026-06-23T00:05:00.000Z',
       users: [{ id: 7, username: 'alice', deletedAt: null }],
-      apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null }],
+      apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null, dumpRetentionSeconds: null, responsesRetentionSeconds: 0 }],
       usage: [
-        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-21T12', requests: 4, tokens: { input: 200 }, cost: { input: 1 } },
+        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-21T12', requests: 4, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '200', unitPrice: '0.000001' }] },
       ],
     };
     const floway = {
       listUpstreams: async () => [currentUpstream],
       listUsers: async () => [
-        { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
+        { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
       ],
       getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
+        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
         viaApiKey: false,
         apiKey: null,
       }),
@@ -546,7 +546,7 @@ describe('PrimaryWindowNotifier', () => {
         throw new Error('users should not be listed without notification candidates');
       },
       getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
+        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
         viaApiKey: false,
         apiKey: null,
       }),
@@ -604,7 +604,7 @@ describe('PrimaryWindowNotifier', () => {
         throw new Error('users should not be listed without notification candidates');
       },
       getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
+        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
         viaApiKey: false,
         apiKey: null,
       }),
@@ -663,7 +663,7 @@ describe('PrimaryWindowNotifier', () => {
         throw new Error('users should not be listed without notification candidates');
       },
       getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
+        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
         viaApiKey: false,
         apiKey: null,
       }),
@@ -719,19 +719,19 @@ describe('PrimaryWindowNotifier', () => {
     const snapshot: SanitizedExportSnapshot = {
       exportedAt: '2026-06-30T10:25:00.000Z',
       users: [{ id: 7, username: 'alice', deletedAt: null }],
-      apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null }],
+      apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null, dumpRetentionSeconds: null, responsesRetentionSeconds: 0 }],
       usage: [
-        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-28T12', requests: 1, tokens: { input: 100 }, cost: { input: 1 } },
-        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-29T12', requests: 1, tokens: { input: 999 }, cost: { input: 1 } },
+        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-28T12', requests: 1, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '100', unitPrice: '0.000001' }] },
+        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-29T12', requests: 1, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '999', unitPrice: '0.000001' }] },
       ],
     };
     const floway = {
       listUpstreams: async () => [upstreamWithPrimaryReset('2026-07-06T06:01:31.799Z', 6)],
       listUsers: async () => [
-        { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
+        { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
       ],
       getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
+        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
         viaApiKey: false,
         apiKey: null,
       }),
@@ -796,18 +796,18 @@ describe('PrimaryWindowNotifier', () => {
     const snapshot: SanitizedExportSnapshot = {
       exportedAt: '2026-07-05T00:10:00.000Z',
       users: [{ id: 7, username: 'alice', deletedAt: null }],
-      apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null }],
+      apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null, dumpRetentionSeconds: null, responsesRetentionSeconds: 0 }],
       usage: [
-        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-07-04T12', requests: 1, tokens: { input: 100 }, cost: { input: 1 } },
+        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-07-04T12', requests: 1, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '100', unitPrice: '0.000001' }] },
       ],
     };
     const floway = {
       listUpstreams: async () => [upstreamWithPrimaryReset('2026-07-12T00:30:00.000Z', 6)],
       listUsers: async () => [
-        { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
+        { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
       ],
       getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
+        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
         viaApiKey: false,
         apiKey: null,
       }),
@@ -866,18 +866,18 @@ describe('PrimaryWindowNotifier', () => {
     const snapshot: SanitizedExportSnapshot = {
       exportedAt: '2026-07-05T00:52:00.000Z',
       users: [{ id: 7, username: 'alice', deletedAt: null }],
-      apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null }],
+      apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null, dumpRetentionSeconds: null, responsesRetentionSeconds: 0 }],
       usage: [
-        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-07-04T12', requests: 1, tokens: { input: 100 }, cost: { input: 1 } },
+        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-07-04T12', requests: 1, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '100', unitPrice: '0.000001' }] },
       ],
     };
     const floway = {
       listUpstreams: async () => [upstreamWithPrimaryReset('2026-07-12T00:51:16.847Z', 4)],
       listUsers: async () => [
-        { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
+        { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
       ],
       getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
+        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
         viaApiKey: false,
         apiKey: null,
       }),
@@ -926,10 +926,10 @@ describe('PrimaryWindowNotifier', () => {
     const floway = {
       listUpstreams: async () => [upstreamWithPrimaryReset('2026-06-29T00:00:00.000Z', 18)],
       listUsers: async () => [
-        { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'], createdAt: '2026-06-23T00:00:00.000Z' },
+        { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-23T00:00:00.000Z' },
       ],
       getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
+        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
         viaApiKey: false,
         apiKey: null,
       }),
@@ -971,18 +971,18 @@ describe('PrimaryWindowNotifier', () => {
     const snapshot: SanitizedExportSnapshot = {
       exportedAt: '2026-06-22T00:05:00.000Z',
       users: [{ id: 7, username: 'alice', deletedAt: null }],
-      apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null }],
+      apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null, dumpRetentionSeconds: null, responsesRetentionSeconds: 0 }],
       usage: [
-        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-21T12', requests: 2, tokens: { input: 100 }, cost: { input: 1 } },
+        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-21T12', requests: 2, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '100', unitPrice: '0.000001' }] },
       ],
     };
     const floway = {
       listUpstreams: async () => [currentUpstream],
       listUsers: async () => [
-        { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
+        { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
       ],
       getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
+        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
         viaApiKey: false,
         apiKey: null,
       }),
@@ -1036,18 +1036,18 @@ describe('PrimaryWindowNotifier', () => {
     const snapshot: SanitizedExportSnapshot = {
       exportedAt: '2026-06-22T00:10:00.000Z',
       users: [{ id: 7, username: 'alice', deletedAt: null }],
-      apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null }],
+      apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null, dumpRetentionSeconds: null, responsesRetentionSeconds: 0 }],
       usage: [
-        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-21T12', requests: 2, tokens: { input: 100 }, cost: { input: 1 } },
+        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-21T12', requests: 2, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '100', unitPrice: '0.000001' }] },
       ],
     };
     const floway = {
       listUpstreams: async () => [currentUpstream],
       listUsers: async () => [
-        { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
+        { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
       ],
       getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
+        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
         viaApiKey: false,
         apiKey: null,
       }),
@@ -1105,7 +1105,7 @@ describe('PrimaryWindowNotifier', () => {
       listUpstreams: async () => [unsupportedUpstream],
       listUsers: async () => [],
       getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
+        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
         viaApiKey: false,
         apiKey: null,
       }),
@@ -1153,7 +1153,7 @@ describe('PrimaryWindowNotifier', () => {
       listUpstreams: async () => [upstreamWithPrimaryReset('2026-06-29T00:00:00.000Z', 0.4, 'up_b')],
       listUsers: async () => [],
       getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
+        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
         viaApiKey: false,
         apiKey: null,
       }),
@@ -1191,10 +1191,10 @@ describe('PrimaryWindowNotifier', () => {
     const floway = {
       listUpstreams: async () => [currentUpstream],
       listUsers: async () => [
-        { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
+        { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
       ],
       getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, canViewGlobalTelemetry: false, upstreamIds: ['up_a'] },
+        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
         viaApiKey: false,
         apiKey: null,
       }),
@@ -1276,7 +1276,7 @@ const createStore = (): BindingStore => {
 const emptySnapshot = (): SanitizedExportSnapshot => ({
   exportedAt: '2026-06-22T00:05:00.000Z',
   users: [{ id: 7, username: 'alice', deletedAt: null }],
-  apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null }],
+  apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null, dumpRetentionSeconds: null, responsesRetentionSeconds: 0 }],
   usage: [],
 });
 
@@ -1289,8 +1289,11 @@ const upstreamWithPrimaryReset = (resetAfterAt: string, usedPercent: number, id 
   created_at: '2026-06-15T00:00:00.000Z',
   updated_at: '2026-06-15T00:00:00.000Z',
   flag_overrides: {},
+  flag_defaults: {},
   disabled_public_model_ids: [],
   proxy_fallback_list: [],
+  model_prefix: null,
+  color: null,
   config: {},
   state: null,
   codex_quota: {

@@ -4,7 +4,6 @@ import {
   BOT_COMMANDS,
   TEST_PRIMARY_WINDOW_COMMAND,
   canShareUpstreamQuota,
-  canViewLeaderboard,
   filterUpstreamsForUser,
   parseLeaderboardArgs,
   parseNewKeyArgs,
@@ -22,8 +21,11 @@ const upstream = (id: string): UpstreamRecord => ({
   created_at: '2026-06-21T00:00:00.000Z',
   updated_at: '2026-06-21T00:00:00.000Z',
   flag_overrides: {},
+  flag_defaults: {},
   disabled_public_model_ids: [],
   proxy_fallback_list: [],
+  model_prefix: null,
+  color: null,
   config: {},
   state: null,
 });
@@ -91,13 +93,6 @@ describe('parseQuotaArgs', () => {
   it('rejects extra quota arguments', () => {
     expect(parseQuotaArgs('up_a verbose')).toEqual({ error: 'Usage: /quota [verbose] <upstream_id>' });
     expect(parseQuotaArgs('verbose up_a extra')).toEqual({ error: 'Usage: /quota [verbose] <upstream_id>' });
-  });
-});
-
-describe('leaderboard permission', () => {
-  it('requires global telemetry permission', () => {
-    expect(canViewLeaderboard({ canViewGlobalTelemetry: true })).toBe(true);
-    expect(canViewLeaderboard({ canViewGlobalTelemetry: false })).toBe(false);
   });
 });
 

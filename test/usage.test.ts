@@ -1,15 +1,57 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  addUsageRecord,
   buildPrimaryQuotaWindow,
-  selectPrimaryQuotaWindowForUpstream,
+  emptyTotals,
   recordCostUsd,
+  selectPrimaryQuotaWindowForUpstream,
   summarizeUsageLeaderboard,
   summarizeUsageQuotaEstimate,
   summarizeUsageWindow,
-  unitPriceForDimension,
+  tokenTotal,
 } from '../src/usage.js';
-import type { SanitizedExportSnapshot, UsageRecord } from '../src/types.js';
+import type {
+  BillingMetric,
+  SanitizedExportApiKey,
+  SanitizedExportSnapshot,
+  UsageMetricRecord,
+  UsageRecord,
+} from '../src/types.js';
+
+const metric = (
+  name: BillingMetric,
+  quantity: string,
+  unitPrice: string | null = null,
+): UsageMetricRecord => ({ metric: name, quantity, unitPrice });
+
+const usageRecord = (
+  keyId: string,
+  upstream: string | null,
+  hour: string,
+  requests: number,
+  metrics: UsageMetricRecord[],
+): UsageRecord => ({
+  keyId,
+  model: 'm',
+  upstream,
+  modelKey: 'm',
+  hour,
+  pricingSelector: {},
+  requests,
+  metrics,
+});
+
+const exportKey = (id: string, userId: number): SanitizedExportApiKey => ({
+  id,
+  userId,
+  name: id,
+  createdAt: '2026-06-01T00:00:00.000Z',
+  upstreamIds: null,
+  deletedAt: null,
+  dumpRetentionSeconds: null,
+  responsesRetentionSeconds: 0,
+});
 
 describe('usage windows', () => {
   it('derives exact boundaries and Floway hour buckets from the primary reset window', () => {
@@ -101,42 +143,52 @@ describe('usage windows', () => {
   });
 });
 
-describe('usage cost', () => {
-  it('matches Floway billing fallback logic', () => {
-    expect(unitPriceForDimension({ input: 1 }, 'input_cache_read')).toBe(1);
-    expect(unitPriceForDimension({ input: 1, input_cache_write: 2 }, 'input_cache_write_1h')).toBe(2);
-    expect(unitPriceForDimension({ output: 9 }, 'input_cache_write_1h')).toBeNull();
+describe('usage metrics', () => {
+  it('computes cost from decimal quantities and per-base-unit prices', () => {
+    const record = usageRecord('k1', 'up', '2026-06-21T00', 1, [
+      metric('input_tokens', '1000000', '0.000002'),
+      metric('input_cache_read_tokens', '1000000', '0.0000005'),
+      metric('output_tokens', '2000000', '0.00001'),
+    ]);
+
+    expect(recordCostUsd(record)).toBe(22.5);
   });
 
-  it('computes USD cost from per-million token pricing snapshots', () => {
-    const record: UsageRecord = {
-      keyId: 'k1',
-      model: 'm',
-      upstream: 'up',
-      modelKey: 'm',
-      hour: '2026-06-21T00',
-      requests: 1,
-      tokens: { input: 1_000_000, input_cache_read: 1_000_000, output: 2_000_000 },
-      cost: { input: 2, input_cache_read: 0.5, output: 10 },
-    };
-    expect(recordCostUsd(record)).toBe(22.5);
+  it('charges non-token metrics but excludes them from token totals', () => {
+    const record = usageRecord('k1', 'up', '2026-06-21T00', 1, [
+      metric('input_audio_tokens', '12.5', '0.01'),
+      metric('input_audio_seconds', '2.5', '0.1'),
+      metric('rerank_searches', '3', '0.05'),
+      metric('output_tokens', '100', null),
+    ]);
+    const totals = emptyTotals();
+    addUsageRecord(totals, record);
+
+    expect(totals.tokens).toEqual({ input_audio: 12.5, output: 100 });
+    expect(tokenTotal(totals.tokens)).toBe(112.5);
+    expect(totals.cost).toBeCloseTo(0.525);
+  });
+
+  it('rejects invalid decimal quantities instead of corrupting reports', () => {
+    const record = usageRecord('k1', 'up', '2026-06-21T00', 1, [
+      metric('input_tokens', 'not-a-number', '0.1'),
+    ]);
+
+    expect(() => recordCostUsd(record)).toThrow('input_tokens quantity');
   });
 });
 
 describe('usage summary', () => {
-  it('uses raw export usage for selected-upstream shares and cost', () => {
+  it('uses raw export metrics for selected-upstream shares and cost', () => {
     const snapshot: SanitizedExportSnapshot = {
       exportedAt: '2026-06-21T00:00:00.000Z',
       users: [{ id: 7, username: 'alice', deletedAt: null }],
-      apiKeys: [
-        { id: 'k1', userId: 7, name: 'A', createdAt: '2026-06-20T00:00:00.000Z', upstreamIds: null, deletedAt: null },
-        { id: 'k2', userId: 8, name: 'B', createdAt: '2026-06-20T00:00:00.000Z', upstreamIds: null, deletedAt: null },
-      ],
+      apiKeys: [exportKey('k1', 7), exportKey('k2', 8)],
       usage: [
-        { keyId: 'k1', model: 'm', upstream: 'up1', modelKey: 'm', hour: '2026-06-21T01', requests: 2, tokens: { input: 100 }, cost: { input: 1 } },
-        { keyId: 'k2', model: 'm', upstream: 'up1', modelKey: 'm', hour: '2026-06-21T01', requests: 6, tokens: { input: 300 }, cost: { input: 1 } },
-        { keyId: 'k1', model: 'm', upstream: 'up2', modelKey: 'm', hour: '2026-06-21T01', requests: 100, tokens: { input: 999 }, cost: { input: 1 } },
-        { keyId: 'k1', model: 'm', upstream: 'up1', modelKey: 'm', hour: '2026-06-21T05', requests: 100, tokens: { input: 999 }, cost: { input: 1 } },
+        usageRecord('k1', 'up1', '2026-06-21T01', 2, [metric('input_tokens', '100', '0.000001')]),
+        usageRecord('k2', 'up1', '2026-06-21T01', 6, [metric('input_tokens', '300', '0.000001')]),
+        usageRecord('k1', 'up2', '2026-06-21T01', 100, [metric('input_tokens', '999', '0.000001')]),
+        usageRecord('k1', 'up1', '2026-06-21T05', 100, [metric('input_tokens', '999', '0.000001')]),
       ],
     };
 
@@ -179,84 +231,31 @@ describe('usage leaderboard', () => {
         { id: 4, username: 'dave', deletedAt: null },
         { id: 5, username: 'erin', deletedAt: null },
       ],
-      apiKeys: [
-        { id: 'k1', userId: 1, name: 'A', createdAt: '2026-06-01T00:00:00.000Z', upstreamIds: null, deletedAt: null },
-        { id: 'k2', userId: 2, name: 'B', createdAt: '2026-06-01T00:00:00.000Z', upstreamIds: null, deletedAt: null },
-        { id: 'k3', userId: 3, name: 'C', createdAt: '2026-06-01T00:00:00.000Z', upstreamIds: null, deletedAt: null },
-        { id: 'k4', userId: 4, name: 'D', createdAt: '2026-06-01T00:00:00.000Z', upstreamIds: null, deletedAt: null },
-        { id: 'k5', userId: 5, name: 'E', createdAt: '2026-06-01T00:00:00.000Z', upstreamIds: null, deletedAt: null },
-      ],
+      apiKeys: [exportKey('k1', 1), exportKey('k2', 2), exportKey('k3', 3), exportKey('k4', 4), exportKey('k5', 5)],
       usage: [
-        {
-          keyId: 'k1',
-          model: 'm',
-          upstream: 'up',
-          modelKey: 'm',
-          hour: '2026-06-22T12',
-          requests: 1,
-          tokens: { input: 100, input_cache_read: 100, output: 100 },
-          cost: { input: 10, input_cache_read: 1, output: 50 },
-        },
-        {
-          keyId: 'k2',
-          model: 'm',
-          upstream: 'up',
-          modelKey: 'm',
-          hour: '2026-06-21T01',
-          requests: 1,
-          tokens: { input: 600, output: 600 },
-          cost: { input: 1, output: 1 },
-        },
-        {
-          keyId: 'k3',
-          model: 'm',
-          upstream: 'up',
-          modelKey: 'm',
-          hour: '2026-06-22T10',
-          requests: 1,
-          tokens: { input: 10, input_cache_read: 90 },
-          cost: { input: 1, input_cache_read: 1 },
-        },
-        {
-          keyId: 'k4',
-          model: 'm',
-          upstream: 'up',
-          modelKey: 'm',
-          hour: '2026-06-20T10',
-          requests: 1,
-          tokens: { input: 250, output: 100 },
-          cost: { input: 1, output: 1 },
-        },
-        {
-          keyId: 'k5',
-          model: 'm',
-          upstream: 'up',
-          modelKey: 'm',
-          hour: '2026-06-19T10',
-          requests: 1,
-          tokens: { input: 20, output: 10 },
-          cost: { input: 1000, output: 1000 },
-        },
-        {
-          keyId: 'k4',
-          model: 'm',
-          upstream: 'up',
-          modelKey: 'm',
-          hour: '2026-06-01T10',
-          requests: 1,
-          tokens: { input: 99_999_999 },
-          cost: { input: 1000 },
-        },
-        {
-          keyId: 'missing',
-          model: 'm',
-          upstream: 'up',
-          modelKey: 'm',
-          hour: '2026-06-22T12',
-          requests: 1,
-          tokens: { input: 99_999_999 },
-          cost: { input: 1000 },
-        },
+        usageRecord('k1', 'up', '2026-06-22T12', 1, [
+          metric('input_tokens', '100', '0.00001'),
+          metric('input_cache_read_tokens', '100', '0.000001'),
+          metric('output_tokens', '100', '0.00005'),
+        ]),
+        usageRecord('k2', 'up', '2026-06-21T01', 1, [
+          metric('input_tokens', '600', '0.000001'),
+          metric('output_tokens', '600', '0.000001'),
+        ]),
+        usageRecord('k3', 'up', '2026-06-22T10', 1, [
+          metric('input_tokens', '10', '0.000001'),
+          metric('input_cache_read_tokens', '90', '0.000001'),
+        ]),
+        usageRecord('k4', 'up', '2026-06-20T10', 1, [
+          metric('input_tokens', '250', '0.000001'),
+          metric('output_tokens', '100', '0.000001'),
+        ]),
+        usageRecord('k5', 'up', '2026-06-19T10', 1, [
+          metric('input_tokens', '20', '0.001'),
+          metric('output_tokens', '10', '0.001'),
+        ]),
+        usageRecord('k4', 'up', '2026-06-01T10', 1, [metric('input_tokens', '99999999', '0.001')]),
+        usageRecord('missing', 'up', '2026-06-22T12', 1, [metric('input_tokens', '99999999', '0.001')]),
       ],
     };
 
@@ -280,7 +279,7 @@ describe('usage leaderboard', () => {
     expect(oneDayReport.totals.cacheReadTokens).toBe(190);
   });
 
-  it('limits leaderboard records to the bound user upstream access list', () => {
+  it('limits global records to the bound user upstream access list', () => {
     const snapshot: SanitizedExportSnapshot = {
       exportedAt: '2026-06-22T12:34:00.000Z',
       users: [
@@ -288,15 +287,11 @@ describe('usage leaderboard', () => {
         { id: 2, username: 'bob', deletedAt: null },
         { id: 3, username: 'carol', deletedAt: null },
       ],
-      apiKeys: [
-        { id: 'k1', userId: 1, name: 'A', createdAt: '2026-06-01T00:00:00.000Z', upstreamIds: null, deletedAt: null },
-        { id: 'k2', userId: 2, name: 'B', createdAt: '2026-06-01T00:00:00.000Z', upstreamIds: null, deletedAt: null },
-        { id: 'k3', userId: 3, name: 'C', createdAt: '2026-06-01T00:00:00.000Z', upstreamIds: null, deletedAt: null },
-      ],
+      apiKeys: [exportKey('k1', 1), exportKey('k2', 2), exportKey('k3', 3)],
       usage: [
-        { keyId: 'k1', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-22T12', requests: 1, tokens: { input: 100 }, cost: null },
-        { keyId: 'k2', model: 'm', upstream: 'up_b', modelKey: 'm', hour: '2026-06-22T12', requests: 1, tokens: { input: 1000 }, cost: null },
-        { keyId: 'k3', model: 'm', upstream: null, modelKey: 'm', hour: '2026-06-22T12', requests: 1, tokens: { input: 500 }, cost: null },
+        usageRecord('k1', 'up_a', '2026-06-22T12', 1, [metric('input_tokens', '100')]),
+        usageRecord('k2', 'up_b', '2026-06-22T12', 1, [metric('input_tokens', '1000')]),
+        usageRecord('k3', null, '2026-06-22T12', 1, [metric('input_tokens', '500')]),
       ],
     };
 
@@ -315,14 +310,11 @@ describe('usage quota estimate', () => {
         { id: 7, username: 'alice', deletedAt: null },
         { id: 8, username: 'bob', deletedAt: null },
       ],
-      apiKeys: [
-        { id: 'k1', userId: 7, name: 'A', createdAt: '2026-06-20T00:00:00.000Z', upstreamIds: null, deletedAt: null },
-        { id: 'k2', userId: 8, name: 'B', createdAt: '2026-06-20T00:00:00.000Z', upstreamIds: null, deletedAt: null },
-      ],
+      apiKeys: [exportKey('k1', 7), exportKey('k2', 8)],
       usage: [
-        { keyId: 'k1', model: 'm', upstream: 'up1', modelKey: 'm', hour: '2026-06-21T01', requests: 1, tokens: { input: 100 }, cost: { input: 1 } },
-        { keyId: 'k2', model: 'm', upstream: 'up1', modelKey: 'm', hour: '2026-06-21T01', requests: 3, tokens: { input: 300 }, cost: { input: 1 } },
-        { keyId: 'k1', model: 'm', upstream: 'up2', modelKey: 'm', hour: '2026-06-21T01', requests: 1, tokens: { input: 999 }, cost: { input: 1 } },
+        usageRecord('k1', 'up1', '2026-06-21T01', 1, [metric('input_tokens', '100', '0.000001')]),
+        usageRecord('k2', 'up1', '2026-06-21T01', 3, [metric('input_tokens', '300', '0.000001')]),
+        usageRecord('k1', 'up2', '2026-06-21T01', 1, [metric('input_tokens', '999', '0.000001')]),
       ],
     };
 

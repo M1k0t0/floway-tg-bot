@@ -1,8 +1,8 @@
 import type {
   BillingDimension,
+  BillingMetric,
   CodexQuotaSnapshot,
   FlowayAdminUser,
-  ModelPricing,
   SanitizedExportSnapshot,
   TokenUsage,
   UpstreamRecord,
@@ -15,6 +15,7 @@ export const BILLING_DIMENSIONS: readonly BillingDimension[] = [
   'input_cache_write',
   'input_cache_write_1h',
   'input_image',
+  'input_audio',
   'output',
   'output_image',
 ];
@@ -96,34 +97,34 @@ type WindowQuotaSnapshot = Pick<
   | 'primary_reset_after_at'
 >;
 
-export const unitPriceForDimension = (pricing: ModelPricing | null, dimension: BillingDimension): number | null => {
-  if (!pricing) return null;
-  switch (dimension) {
-  case 'input':
-    return pricing.input ?? null;
-  case 'input_cache_read':
-    return pricing.input_cache_read ?? pricing.input ?? null;
-  case 'input_cache_write':
-    return pricing.input_cache_write ?? pricing.input ?? null;
-  case 'input_cache_write_1h':
-    return pricing.input_cache_write_1h ?? pricing.input_cache_write ?? pricing.input ?? null;
-  case 'input_image':
-    return pricing.input_image ?? pricing.input ?? null;
-  case 'output':
-    return pricing.output ?? null;
-  case 'output_image':
-    return pricing.output_image ?? pricing.output ?? null;
+const TOKEN_DIMENSION_BY_METRIC: Partial<Record<BillingMetric, BillingDimension>> = {
+  input_tokens: 'input',
+  input_cache_read_tokens: 'input_cache_read',
+  input_cache_write_tokens: 'input_cache_write',
+  input_cache_write_1h_tokens: 'input_cache_write_1h',
+  input_image_tokens: 'input_image',
+  input_audio_tokens: 'input_audio',
+  output_tokens: 'output',
+  output_image_tokens: 'output_image',
+};
+
+const decimalStringToNumber = (value: string, label: string): number => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new TypeError(`${label} must be a non-negative finite decimal string`);
   }
+  return parsed;
 };
 
 export const recordCostUsd = (record: UsageRecord): number => {
   let total = 0;
-  for (const dimension of BILLING_DIMENSIONS) {
-    const tokens = record.tokens[dimension] ?? 0;
-    const unitPrice = unitPriceForDimension(record.cost, dimension);
-    if (tokens > 0 && unitPrice !== null) total += tokens * unitPrice;
+  for (const row of record.metrics) {
+    if (row.unitPrice === null) continue;
+    const quantity = decimalStringToNumber(row.quantity, `${row.metric} quantity`);
+    const unitPrice = decimalStringToNumber(row.unitPrice, `${row.metric} unit price`);
+    total += quantity * unitPrice;
   }
-  return total / 1_000_000;
+  return total;
 };
 
 export const tokenTotal = (tokens: TokenUsage): number =>
@@ -143,8 +144,10 @@ export const emptyTotals = (): UsageTotals => ({ requests: 0, tokens: {}, cost: 
 export const addUsageRecord = (totals: UsageTotals, record: UsageRecord): void => {
   totals.requests += record.requests;
   totals.cost += recordCostUsd(record);
-  for (const dimension of BILLING_DIMENSIONS) {
-    const count = record.tokens[dimension] ?? 0;
+  for (const row of record.metrics) {
+    const dimension = TOKEN_DIMENSION_BY_METRIC[row.metric];
+    if (!dimension) continue;
+    const count = decimalStringToNumber(row.quantity, `${row.metric} quantity`);
     if (count > 0) totals.tokens[dimension] = (totals.tokens[dimension] ?? 0) + count;
   }
 };

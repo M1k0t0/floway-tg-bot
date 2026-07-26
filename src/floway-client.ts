@@ -76,7 +76,10 @@ export class FlowayClient {
   }
 
   async rotateKey(session: string, id: string): Promise<ApiKeyRecord> {
-    return await this.userRequest<ApiKeyRecord>(session, `/api/keys/${encodeURIComponent(id)}/rotate`, { method: 'POST' });
+    return await this.userRequest<ApiKeyRecord>(session, `/api/keys/${encodeURIComponent(id)}/rotate`, {
+      method: 'POST',
+      body: {},
+    });
   }
 
   async listUpstreams(): Promise<UpstreamRecord[]> {
@@ -113,16 +116,26 @@ export class FlowayClient {
         username: user.username,
         deletedAt: user.deletedAt,
       })),
-      apiKeys: payload.data.apiKeys.map(({ key: _key, ...rest }) => rest),
+      apiKeys: payload.data.apiKeys.map(apiKey => ({
+        id: apiKey.id,
+        userId: apiKey.userId,
+        name: apiKey.name,
+        createdAt: apiKey.createdAt,
+        ...(apiKey.lastUsedAt !== undefined ? { lastUsedAt: apiKey.lastUsedAt } : {}),
+        upstreamIds: apiKey.upstreamIds,
+        deletedAt: apiKey.deletedAt,
+        dumpRetentionSeconds: apiKey.dumpRetentionSeconds,
+        responsesRetentionSeconds: apiKey.responsesRetentionSeconds,
+      })),
       usage: payload.data.usage.map(record => ({
         keyId: record.keyId,
         model: record.model,
         upstream: record.upstream,
         modelKey: record.modelKey,
         hour: record.hour,
+        pricingSelector: structuredClone(record.pricingSelector),
         requests: record.requests,
-        tokens: { ...record.tokens },
-        cost: record.cost ? { ...record.cost } : null,
+        metrics: record.metrics.map(metric => ({ ...metric })),
       })),
     };
     this.exportCache = {

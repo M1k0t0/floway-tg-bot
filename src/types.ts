@@ -104,7 +104,7 @@ export interface UpstreamModelRecord {
   endpoints: Record<string, unknown>;
   display_name?: string;
   limits?: Record<string, number>;
-  cost?: ModelPricing;
+  pricing?: ModelPricing;
 }
 
 export interface UpstreamModelsResponse {

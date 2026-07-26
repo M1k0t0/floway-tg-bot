@@ -86,12 +86,22 @@ export class FlowayClient {
     return await this.adminRequest<UpstreamRecord[]>('/api/upstreams');
   }
 
-  async getUpstreamModels(id: string): Promise<UpstreamModelsResponse> {
-    return await this.adminRequest<UpstreamModelsResponse>(`/api/upstreams/${encodeURIComponent(id)}/models`);
+  async getUpstream(id: string): Promise<UpstreamRecord> {
+    return await this.adminRequest<UpstreamRecord>(`/api/upstreams/${encodeURIComponent(id)}`);
   }
 
-  async getCopilotQuota(id: string): Promise<CopilotQuotaResponse> {
-    return await this.adminRequest<CopilotQuotaResponse>(`/api/upstreams/${encodeURIComponent(id)}/copilot/quota`);
+  async getUpstreamModels(record: UpstreamRecord): Promise<UpstreamModelsResponse> {
+    return await this.adminRequest<UpstreamModelsResponse>('/api/upstreams/list-models', {
+      method: 'POST',
+      body: { record },
+    });
+  }
+
+  async getCopilotQuota(record: UpstreamRecord): Promise<CopilotQuotaResponse> {
+    return await this.adminRequest<CopilotQuotaResponse>('/api/upstreams/copilot/quota', {
+      method: 'POST',
+      body: { record },
+    });
   }
 
   async getTokenUsage(session: string, start: string, end: string): Promise<TokenUsageResponse> {

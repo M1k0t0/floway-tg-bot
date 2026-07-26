@@ -153,11 +153,11 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
         await replyLong(ctx, selection.message);
         return;
       }
-      const upstream = selection.upstream;
+      const upstream = await floway.getUpstream(selection.upstream.id);
       const [models, copilotQuota] = await Promise.all([
-        floway.getUpstreamModels(upstream.id),
+        floway.getUpstreamModels(upstream),
         upstream.kind === 'copilot'
-          ? floway.getCopilotQuota(upstream.id).catch(error => ({ error: error instanceof Error ? error.message : String(error) }))
+          ? floway.getCopilotQuota(upstream).catch(error => ({ error: error instanceof Error ? error.message : String(error) }))
           : Promise.resolve(null),
       ]);
       await replyLong(ctx, formatUpstreamDetail(upstream, models.data, copilotQuota));

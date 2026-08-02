@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -92,6 +93,25 @@ describe('automatic database migrations', () => {
     expect(pragmaFromPath(dbPath, 'user_version')).toBe(CURRENT_SCHEMA_VERSION);
   });
 
+  it('serializes concurrent startup migration across processes', async () => {
+    const { dbPath, secretKey } = createDatabasePath();
+    const key = secretKey.toString('base64');
+    const script = [
+      "import { BindingStore } from './src/db.ts';",
+      `const store = new BindingStore(${JSON.stringify(dbPath)}, Buffer.from(${JSON.stringify(key)}, 'base64'));`,
+      'store.close();',
+    ].join(' ');
+
+    const results = await Promise.all([
+      runNodeScript(script),
+      runNodeScript(script),
+    ]);
+    expect(results).toEqual([{ code: 0, stderr: '' }, { code: 0, stderr: '' }]);
+    expect(pragmaFromPath(dbPath, 'user_version')).toBe(CURRENT_SCHEMA_VERSION);
+    const reopened = track(new BindingStore(dbPath, secretKey));
+    expect(reopened.listBindingsSafely()).toEqual({ bindings: [], errors: [], probableWrongSecret: false });
+  });
+
   it('rejects future versions and incompatible version-zero schemas without persistent changes', () => {
     const future = createDatabasePath();
     const futureDb = new DatabaseSync(future.dbPath);
@@ -162,6 +182,21 @@ describe('automatic database migrations', () => {
     expect(() => validateMigrationRegistry([{ ...migration(1, []), name: '' }])).toThrow('expected 1');
   });
 });
+
+const runNodeScript = async (script: string): Promise<{ code: number | null; stderr: string }> =>
+  await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['--no-warnings', '--import', 'tsx', '--input-type=module', '--eval', script], {
+      cwd: process.cwd(),
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', chunk => {
+      stderr += String(chunk);
+    });
+    child.once('error', reject);
+    child.once('close', code => resolve({ code, stderr: stderr.trim() }));
+  });
 
 const migration = (version: number, applied: number[]): DatabaseMigration => ({
   version,

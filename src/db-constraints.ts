@@ -1,0 +1,2 @@
+export const MAX_TIMESTAMP_MS = 8_640_000_000_000_000;
+export const MAX_DELIVERY_ERROR_LENGTH = 1_000;

@@ -179,7 +179,7 @@ const resolveCandidates = (
 
   const newest = valid.filter(candidate => candidate.observation.observedAtMs === newestObservedAtMs);
   const observation = newest[0]!.observation;
-  if (!newest.every(candidate => equivalentNormalizedObservation(observation, candidate.observation))) {
+  if (!newest.every(candidate => sameNormalizedObservation(observation, candidate.observation))) {
     return { status: 'ambiguous' };
   }
   return { status: 'valid', observation };
@@ -247,21 +247,6 @@ const primaryQuotaCandidateKind = (bucketKey: string, snapshot: unknown): Candid
 const validUsedPercent = (value: unknown): boolean =>
   value === undefined
   || (typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100);
-
-const equivalentNormalizedObservation = (
-  left: PrimaryQuotaObservation,
-  right: PrimaryQuotaObservation,
-): boolean =>
-  left.upstreamId === right.upstreamId
-  && left.activeLimit === right.activeLimit
-  && left.observedAt === right.observedAt
-  && left.observedAtMs === right.observedAtMs
-  && left.startAt === right.startAt
-  && left.startMs === right.startMs
-  && left.endAt === right.endAt
-  && left.endMs === right.endMs
-  && left.durationMs === right.durationMs
-  && left.usedPercent === right.usedPercent;
 
 const sameNormalizedObservation = (
   left: PrimaryQuotaObservation,

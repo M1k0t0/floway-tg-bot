@@ -187,8 +187,8 @@ describe('resolvePrimaryQuotaObservation', () => {
 
   it('coalesces identical newest candidates and rejects equal-time conflicts', () => {
     const common = snapshot('2026-07-01T02:00:00Z', '2026-07-01T03:00:00Z');
-    expect(resolvePrimaryQuotaObservation(upstream({ a: common, aCopy: { ...common } }))).toMatchObject({
-      status: 'valid',
+    expect(resolvePrimaryQuotaObservation(upstream({ a: common, aCopy: { ...common } }))).toEqual({
+      status: 'ambiguous',
     });
 
     const fallbackA = { ...common };

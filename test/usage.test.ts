@@ -56,6 +56,7 @@ const exportKey = (id: string, userId: number): SanitizedExportApiKey => ({
 describe('usage windows', () => {
   it('derives exact boundaries and Floway hour buckets from the primary reset window', () => {
     const window = buildPrimaryQuotaWindow({
+      observed_at: '2026-06-21T00:31:00.000Z',
       primary_used_percent: 90,
       primary_window_minutes: 10080,
       primary_reset_after_at: '2026-06-28T00:30:45.123Z',
@@ -75,6 +76,10 @@ describe('usage windows', () => {
     expect(buildPrimaryQuotaWindow(null)).toBeNull();
     expect(buildPrimaryQuotaWindow({})).toBeNull();
     expect(buildPrimaryQuotaWindow({ primary_window_minutes: 10080, primary_reset_after_at: 'x' })).toBeNull();
+    expect(buildPrimaryQuotaWindow({
+      primary_window_minutes: 10080,
+      primary_reset_after_at: '2026-06-28T00:00:00.000Z',
+    })).toBeNull();
   });
 
   it('reads a primary quota window only from Codex premium snapshots', () => {

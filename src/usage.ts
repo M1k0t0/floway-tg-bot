@@ -236,13 +236,11 @@ export const buildPrimaryQuotaWindow = (
   bucket?: Pick<CodexQuotaBucket, 'key' | 'snapshot'>,
 ): UsageWindow | null => {
   if (!quota) return null;
-  const resetAt = quota.primary_reset_after_at;
   const observation = parsePrimaryQuotaObservation(
     'legacy',
     bucket?.key ?? CODEX_QUOTA_ACTIVE_LIMIT,
     {
       ...quota,
-      observed_at: quota.observed_at ?? resetAt,
       active_limit: quota.active_limit ?? bucket?.snapshot.active_limit,
     },
   );

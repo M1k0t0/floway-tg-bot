@@ -86,12 +86,13 @@ describe('usage windows', () => {
       primary_reset_after_at: '2026-06-28T00:00:00.000Z',
     };
 
-    expect(selectPrimaryQuotaWindowForUpstream({ kind: 'codex', codex_quota: { 'chatgpt-plus': codexQuota } })).not.toBeNull();
-    expect(selectPrimaryQuotaWindowForUpstream({ kind: 'custom', codex_quota: { 'chatgpt-plus': codexQuota } })).toBeNull();
+    expect(selectPrimaryQuotaWindowForUpstream({ id: 'up', kind: 'codex', codex_quota: { 'chatgpt-plus': codexQuota } })).not.toBeNull();
+    expect(selectPrimaryQuotaWindowForUpstream({ id: 'up', kind: 'custom', codex_quota: { 'chatgpt-plus': codexQuota } })).toBeNull();
   });
 
   it('uses only the premium active-limit bucket for quota windows', () => {
     const window = selectPrimaryQuotaWindowForUpstream({
+      id: 'up',
       kind: 'codex',
       codex_quota: {
         enterprise: {
@@ -117,7 +118,7 @@ describe('usage windows', () => {
       quotaActiveLimit: 'premium',
       upstreamPercent: 30,
     }));
-    expect(selectPrimaryQuotaWindowForUpstream({ kind: 'codex', codex_quota: { enterprise: {
+    expect(selectPrimaryQuotaWindowForUpstream({ id: 'up', kind: 'codex', codex_quota: { enterprise: {
       observed_at: '2026-06-21T00:01:00.000Z',
       active_limit: 'enterprise',
       primary_used_percent: 20,
@@ -127,14 +128,14 @@ describe('usage windows', () => {
   });
 
   it('matches premium snapshots with normalized active-limit and map-key names', () => {
-    expect(selectPrimaryQuotaWindowForUpstream({ kind: 'codex', codex_quota: { 'chatgpt-plus': {
+    expect(selectPrimaryQuotaWindowForUpstream({ id: 'up', kind: 'codex', codex_quota: { 'chatgpt-plus': {
       observed_at: '2026-06-21T00:00:00.000Z',
       active_limit: ' Premium ',
       primary_used_percent: 44,
       primary_window_minutes: 10080,
       primary_reset_after_at: '2026-06-28T00:00:00.000Z',
     } } })).toMatchObject({ quotaBucketKey: 'chatgpt-plus', upstreamPercent: 44 });
-    expect(selectPrimaryQuotaWindowForUpstream({ kind: 'codex', codex_quota: { premium: {
+    expect(selectPrimaryQuotaWindowForUpstream({ id: 'up', kind: 'codex', codex_quota: { premium: {
       observed_at: '2026-06-21T00:00:00.000Z',
       primary_used_percent: 55,
       primary_window_minutes: 10080,

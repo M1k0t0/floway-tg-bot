@@ -1,3 +1,9 @@
+import {
+  parsePrimaryQuotaObservation,
+  PRIMARY_QUOTA_ACTIVE_LIMIT,
+  resolvePrimaryQuotaObservation,
+  type PrimaryQuotaObservation,
+} from './quota-window.js';
 import type {
   BillingDimension,
   BillingMetric,
@@ -26,6 +32,11 @@ export interface UsageWindow {
   endHour: string;
   startAt: string;
   endAt: string;
+  observedAt?: string;
+  observedAtMs?: number;
+  startMs?: number;
+  endMs?: number;
+  durationMs?: number;
   upstreamPercent?: number;
   quotaBucketKey?: string;
   quotaActiveLimit?: string;
@@ -36,7 +47,7 @@ export interface CodexQuotaBucket {
   snapshot: CodexQuotaSnapshot;
 }
 
-export const CODEX_QUOTA_ACTIVE_LIMIT = 'premium';
+export const CODEX_QUOTA_ACTIVE_LIMIT = PRIMARY_QUOTA_ACTIVE_LIMIT;
 
 export interface UsageWindowReport {
   window: UsageWindow;
@@ -95,7 +106,11 @@ type WindowQuotaSnapshot = Pick<
   | 'primary_used_percent'
   | 'primary_window_minutes'
   | 'primary_reset_after_at'
->;
+> & Partial<Pick<
+  CodexQuotaSnapshot,
+  | 'observed_at'
+  | 'active_limit'
+>>;
 
 const TOKEN_DIMENSION_BY_METRIC: Partial<Record<BillingMetric, BillingDimension>> = {
   input_tokens: 'input',
@@ -190,28 +205,30 @@ export const addUsageRecord = (totals: UsageTotals, record: UsageRecord): void =
 export const hourString = (date: Date): string => date.toISOString().slice(0, 13);
 
 export const codexQuotaBucketsForUpstream = (upstream: Pick<UpstreamRecord, 'kind' | 'codex_quota'>): CodexQuotaBucket[] => {
-  if (upstream.kind !== 'codex' || !upstream.codex_quota) return [];
-  return Object.entries(upstream.codex_quota)
-    .filter(([key, snapshot]) => isPremiumCodexQuotaBucket(key, snapshot))
+  if (upstream.kind !== 'codex' || !isQuotaSnapshotMap(upstream.codex_quota)) return [];
+  const entries = Object.entries(upstream.codex_quota);
+  const explicit = entries.filter(([, snapshot]) =>
+    normalizeCodexQuotaActiveLimit(snapshot?.active_limit) === CODEX_QUOTA_ACTIVE_LIMIT);
+  const eligible = explicit.length > 0
+    ? explicit
+    : entries.filter(([key, snapshot]) =>
+      snapshot?.active_limit === undefined
+      && normalizeCodexQuotaActiveLimit(key) === CODEX_QUOTA_ACTIVE_LIMIT);
+  return eligible
+    .filter((entry): entry is [string, CodexQuotaSnapshot] => isQuotaSnapshot(entry[1]))
     .map(([key, snapshot]) => ({ key, snapshot }))
     .sort((a, b) => a.key.localeCompare(b.key));
 };
 
-const isPremiumCodexQuotaBucket = (key: string, snapshot: CodexQuotaSnapshot): boolean =>
-  normalizeCodexQuotaActiveLimit(snapshot.active_limit) === CODEX_QUOTA_ACTIVE_LIMIT
-  || normalizeCodexQuotaActiveLimit(key) === CODEX_QUOTA_ACTIVE_LIMIT;
-
-const normalizeCodexQuotaActiveLimit = (value: string | undefined): string | null => {
-  const normalized = value?.trim().toLowerCase();
+const normalizeCodexQuotaActiveLimit = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
   return normalized || null;
 };
 
-export const selectPrimaryQuotaWindowForUpstream = (upstream: Pick<UpstreamRecord, 'kind' | 'codex_quota'>): UsageWindow | null => {
-  for (const bucket of codexQuotaBucketsForUpstream(upstream)) {
-    const window = buildPrimaryQuotaWindow(bucket.snapshot, bucket);
-    if (window) return window;
-  }
-  return null;
+export const selectPrimaryQuotaWindowForUpstream = (upstream: Pick<UpstreamRecord, 'id' | 'kind' | 'codex_quota'>): UsageWindow | null => {
+  const resolution = resolvePrimaryQuotaObservation(upstream as UpstreamRecord);
+  return resolution.status === 'valid' ? observationToUsageWindow(resolution.observation) : null;
 };
 
 export const buildPrimaryQuotaWindow = (
@@ -219,12 +236,17 @@ export const buildPrimaryQuotaWindow = (
   bucket?: Pick<CodexQuotaBucket, 'key' | 'snapshot'>,
 ): UsageWindow | null => {
   if (!quota) return null;
-  return quotaWindow(
-    quota.primary_window_minutes,
-    quota.primary_reset_after_at,
-    quota.primary_used_percent,
-    bucket,
+  const resetAt = quota.primary_reset_after_at;
+  const observation = parsePrimaryQuotaObservation(
+    'legacy',
+    bucket?.key ?? CODEX_QUOTA_ACTIVE_LIMIT,
+    {
+      ...quota,
+      observed_at: quota.observed_at ?? resetAt,
+      active_limit: quota.active_limit ?? bucket?.snapshot.active_limit,
+    },
   );
+  return observation ? observationToUsageWindow(observation) : null;
 };
 
 export const summarizeUsageWindow = (
@@ -378,24 +400,28 @@ const validDateOrFallback = (value: string, fallback: Date): Date => {
   return Number.isFinite(date.getTime()) ? date : fallback;
 };
 
-const quotaWindow = (
-  minutes: number | undefined,
-  resetAt: string | undefined,
-  upstreamPercent: number | undefined,
-  bucket?: Pick<CodexQuotaBucket, 'key' | 'snapshot'>,
-): UsageWindow | null => {
-  if (!minutes || !resetAt) return null;
-  const end = new Date(resetAt);
-  if (!Number.isFinite(end.getTime())) return null;
-  const start = new Date(end.getTime() - minutes * 60_000);
+const observationToUsageWindow = (observation: PrimaryQuotaObservation): UsageWindow => {
+  const start = new Date(observation.startMs);
+  const end = new Date(observation.endMs);
   return {
     label: 'Primary window',
-    startAt: start.toISOString(),
-    endAt: end.toISOString(),
+    startAt: observation.startAt,
+    endAt: observation.endAt,
     startHour: hourString(start),
     endHour: hourString(end),
-    ...(upstreamPercent !== undefined ? { upstreamPercent } : {}),
-    ...(bucket ? { quotaBucketKey: bucket.key } : {}),
-    ...(bucket?.snapshot.active_limit ? { quotaActiveLimit: bucket.snapshot.active_limit } : {}),
+    observedAt: observation.observedAt,
+    observedAtMs: observation.observedAtMs,
+    startMs: observation.startMs,
+    endMs: observation.endMs,
+    durationMs: observation.durationMs,
+    ...(observation.usedPercent !== null ? { upstreamPercent: observation.usedPercent } : {}),
+    quotaBucketKey: observation.bucketKey,
+    quotaActiveLimit: observation.activeLimit,
   };
 };
+
+const isQuotaSnapshotMap = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isQuotaSnapshot = (value: unknown): value is CodexQuotaSnapshot =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);

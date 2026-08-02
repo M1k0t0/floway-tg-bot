@@ -1,3 +1,4 @@
+import type { PrimaryWindowEvent } from './db.js';
 import type {
   ApiKeyRecord,
   Binding,
@@ -294,6 +295,51 @@ export const formatPrimaryWindowNotification = (
   return lines.join('\n');
 };
 
+export const formatPrimaryWindowEventNotification = (
+  upstream: UpstreamRecord,
+  event: PrimaryWindowEvent,
+  report: UsageWindowReport | null,
+  quotaEstimate: string,
+): string => {
+  const upstreamName = truncateCodePoints(upstream.name || event.upstreamName, 160);
+  const upstreamId = truncateCodePoints(upstream.id || event.upstreamId, 160);
+  const transition = event.kind === 'manual' ? 'Early/manual provider refresh' : 'Provider-confirmed natural refresh';
+  const previousEnd = event.effectivePreviousUsageEndAtMs ?? event.previous.endAtMs;
+  const lines = [
+    blockTitle('Primary window refreshed'),
+    `${bold(upstreamName)} ${code(upstreamId)}`,
+    label('Transition', html(transition)),
+    label('Previous window', `${code(formatTimestamp(event.previous.startAtMs))} -&gt; ${code(formatTimestamp(previousEnd))}`),
+    label('Current window', `${code(formatTimestamp(event.current.startAtMs))} -&gt; ${code(formatTimestamp(event.current.endAtMs))}`),
+    label('Last upstream primary used', bold(formatPercent(event.previous.usedPercent))),
+    label('Last observed', code(formatTimestamp(event.previous.observedAtMs))),
+    '',
+  ];
+  if (report) {
+    lines.push(
+      blockTitle('Approximate hourly attribution'),
+      label('Your upstream tokens', `${bold(formatNumber(tokenTotal(report.user.tokens)))} (${formatTokenUsage(report.user.tokens)})`),
+      label('All upstream tokens', `${bold(formatNumber(tokenTotal(report.upstream.tokens)))} (${formatTokenUsage(report.upstream.tokens)})`),
+      label('Requests', `${bold(formatNumber(report.user.requests))} / ${formatNumber(report.upstream.requests)}`),
+      label('Upstream cost', `${bold(formatMoney(report.user.cost))} / ${formatMoney(report.upstream.cost)}`),
+      'Floway exports usage in whole-hour buckets, so boundary-hour attribution is approximate.',
+      '',
+    );
+  }
+  lines.push(quotaEstimate);
+  const full = lines.join('\n');
+  if (full.length <= 3_800) return full;
+  return [
+    blockTitle('Primary window refreshed'),
+    `${bold(truncateCodePoints(upstreamName, 80))} ${code(truncateCodePoints(upstreamId, 80))}`,
+    label('Transition', html(transition)),
+    label('Previous window', `${code(formatTimestamp(event.previous.startAtMs))} -&gt; ${code(formatTimestamp(previousEnd))}`),
+    label('Current window', `${code(formatTimestamp(event.current.startAtMs))} -&gt; ${code(formatTimestamp(event.current.endAtMs))}`),
+    label('Last upstream primary used', bold(formatPercent(event.previous.usedPercent))),
+    'Hourly usage detail was omitted to keep this notification in one Telegram message. Use /usage for current details.',
+  ].join('\n');
+};
+
 export const formatQuotaEstimate = (upstream: UpstreamRecord, report: UsageQuotaEstimate | null): string => {
   if (!report) {
     return [
@@ -481,6 +527,11 @@ const formatModelsCache = (upstream: UpstreamRecord): string => {
   const fetched = cache.fetchedAt ? code(formatTimestamp(cache.fetchedAt)) : 'never';
   const lastError = cache.lastError ? `, last error ${code(cache.lastError.message)} at ${code(formatTimestamp(cache.lastError.at))}` : '';
   return `fetched ${fetched}${lastError}`;
+};
+
+const truncateCodePoints = (value: string, maxLength: number): string => {
+  const points = [...value];
+  return points.length <= maxLength ? value : `${points.slice(0, Math.max(0, maxLength - 1)).join('')}…`;
 };
 
 const stringifyCompact = (value: unknown): string => JSON.stringify(value, null, 2).slice(0, 1200);

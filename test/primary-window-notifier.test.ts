@@ -222,7 +222,7 @@ describe('PrimaryWindowNotifier', () => {
     seedPendingDelivery(firstStore, binding.bindingId);
     const secondStore = track(new BindingStore(dbPath, secretKey));
     const upstream = quotaUpstream('2026-06-01T05:00:00.000Z', '2026-06-01T10:00:00.000Z', '2026-06-01T05:01:00.000Z', 1);
-    const sendMessage = vi.fn(async () => undefined);
+    const sendMessage = vi.fn(async (_chatId: string, _text: string, _extra: { parse_mode: 'HTML' }) => undefined);
     const first = createRuntime(firstStore, () => [upstream], sendMessage);
     const second = createRuntime(secondStore, () => [upstream], sendMessage);
 
@@ -272,7 +272,7 @@ describe('PrimaryWindowNotifier', () => {
 const createRuntime = (
   store: BindingStore,
   upstreams: () => UpstreamRecord[] | Promise<UpstreamRecord[]>,
-  sendMessage = vi.fn(async () => undefined),
+  sendMessage = vi.fn(async (_chatId: string, _text: string, _extra: { parse_mode: 'HTML' }) => undefined),
 ) => {
   const exportUsageSnapshot = vi.fn(async () => EMPTY_SNAPSHOT);
   const floway = {

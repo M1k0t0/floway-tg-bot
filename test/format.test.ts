@@ -72,6 +72,7 @@ describe('formatters', () => {
     expect(unbound).toContain('<code>/bind &lt;username&gt; &lt;password&gt;</code>');
 
     const binding: Binding = {
+      bindingId: 1,
       telegramUserId: 'tg1',
       flowayUserId: 7,
       username: 'alice <prod>&',

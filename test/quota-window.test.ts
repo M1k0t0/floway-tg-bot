@@ -41,7 +41,7 @@ const upstream = (
   color: null,
   config: {},
   state: null,
-  codex_quota: codexQuota as UpstreamRecord['codex_quota'],
+  codex_quota: codexQuota as Record<string, CodexQuotaSnapshot> | null,
 });
 
 const validObservation = (overrides: Partial<PrimaryQuotaObservation> = {}): PrimaryQuotaObservation => ({
@@ -88,11 +88,13 @@ describe('resolvePrimaryQuotaObservation', () => {
   });
 
   it('normalizes explicit-offset timestamps and preserves observed time', () => {
-    const result = resolvePrimaryQuotaObservation(upstream({ plus: snapshot(
+    const quota = snapshot(
       '2026-07-01T03:04:05.125+02:00',
       '2026-07-01T04:00:00+02:00',
-      { active_limit: ' Premium ', primary_window_minutes: 90, primary_used_percent: undefined },
-    ) }));
+      { active_limit: ' Premium ', primary_window_minutes: 90 },
+    );
+    delete quota.primary_used_percent;
+    const result = resolvePrimaryQuotaObservation(upstream({ plus: quota }));
 
     expect(result).toEqual({
       status: 'valid',

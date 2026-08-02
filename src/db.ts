@@ -407,7 +407,7 @@ export class BindingStore {
       this.db.prepare('UPDATE bindings SET username = ?, updated_at_ms = ? WHERE id = ?')
         .run(input.username, nowMs, expectedBindingId);
       const updated = this.db.prepare(`SELECT ${BINDING_COLUMNS} FROM bindings WHERE id = ?`)
-        .get(expectedBindingId) as BindingRow;
+        .get(expectedBindingId) as unknown as BindingRow;
       return { status: 'updated', binding: this.decodeBinding(updated) };
     });
   }
@@ -496,7 +496,7 @@ export class BindingStore {
       upstreamId,
       expectedRevision,
     );
-    return this.cursorMutationResult(upstreamId, expectedRevision, result.changes);
+    return this.cursorMutationResult(upstreamId, expectedRevision, Number(result.changes));
   }
 
   stagePendingCandidate(
@@ -520,7 +520,7 @@ export class BindingStore {
       upstreamId,
       expectedRevision,
     );
-    return this.cursorMutationResult(upstreamId, expectedRevision, result.changes, true);
+    return this.cursorMutationResult(upstreamId, expectedRevision, Number(result.changes), true);
   }
 
   replacePendingCandidate(
@@ -545,7 +545,7 @@ export class BindingStore {
       upstreamId,
       expectedRevision,
     );
-    return this.cursorMutationResult(upstreamId, expectedRevision, result.changes);
+    return this.cursorMutationResult(upstreamId, expectedRevision, Number(result.changes));
   }
 
   clearPendingCandidate(upstreamId: string, expectedRevision: number): CursorMutationResult {
@@ -556,7 +556,7 @@ export class BindingStore {
         pending_first_seen_at_ms = NULL, pending_observation_count = NULL
       WHERE upstream_id = ? AND revision = ?
     `).run(upstreamId, expectedRevision);
-    return this.cursorMutationResult(upstreamId, expectedRevision, result.changes);
+    return this.cursorMutationResult(upstreamId, expectedRevision, Number(result.changes));
   }
 
   commitTransition(
@@ -650,7 +650,7 @@ export class BindingStore {
           ...uniqueBindingIds,
           candidateFirstSeenAtMs,
         );
-        deliveryCount = deliveries.changes;
+        deliveryCount = Number(deliveries.changes);
       }
 
       const storedEvent = this.getEvent(eventId);
@@ -807,7 +807,7 @@ export class BindingStore {
     assertTimestamp(beforeDetectedAtMs, 'retention cutoff');
     assertSafeInteger(limit, 'purge limit', 1);
     const boundedLimit = Math.min(limit, MAX_PURGE_BATCH_SIZE);
-    return this.immediateTransaction(() => this.db.prepare(`
+    return this.immediateTransaction(() => Number(this.db.prepare(`
       DELETE FROM primary_window_event
       WHERE id IN (
         SELECT event.id
@@ -821,7 +821,7 @@ export class BindingStore {
         ORDER BY event.detected_at_ms, event.id
         LIMIT ?
       )
-    `).run(beforeDetectedAtMs, boundedLimit).changes);
+    `).run(beforeDetectedAtMs, boundedLimit).changes));
   }
 
   list(): Binding[] {

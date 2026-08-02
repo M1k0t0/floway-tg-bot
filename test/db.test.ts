@@ -260,7 +260,12 @@ describe('BindingStore cursor and transition transactions', () => {
     expect(store.updateSameObservation('up_a', 0, { ...previous, usedPercent: 80 }).status).toBe('updated');
     expect(store.getCursor('up_a')).toMatchObject({
       revision: 0,
-      anchor: previous,
+      anchor: {
+        startAtMs: previous.startAtMs,
+        endAtMs: previous.endAtMs,
+        durationMs: previous.durationMs,
+        observedAtMs: previous.observedAtMs,
+      },
       latest: { ...previous, usedPercent: 80 },
     });
 
@@ -288,7 +293,16 @@ describe('BindingStore cursor and transition transactions', () => {
 
     const result = store.commitTransition(0, transition(), [eligible.bindingId, tooNew.bindingId, 999_999], current.observedAtMs);
     expect(result).toMatchObject({ status: 'committed', deliveryCount: 1 });
-    expect(store.getCursor('up_a')).toMatchObject({ revision: 1, anchor: current, pending: null });
+    expect(store.getCursor('up_a')).toMatchObject({
+      revision: 1,
+      anchor: {
+        startAtMs: current.startAtMs,
+        endAtMs: current.endAtMs,
+        durationMs: current.durationMs,
+        observedAtMs: current.observedAtMs,
+      },
+      pending: null,
+    });
     expect(store.listEvents('up_a')).toHaveLength(1);
     expect(store.listDeliveries()).toEqual([
       expect.objectContaining({ bindingId: eligible.bindingId, status: 'pending', attempts: 0 }),
@@ -319,7 +333,12 @@ describe('BindingStore cursor and transition transactions', () => {
         .toEqual({ status: 'candidate-mismatch' });
       expect(store.getCursor('up_a')).toMatchObject({
         revision: 0,
-        anchor: previous,
+        anchor: {
+          startAtMs: previous.startAtMs,
+          endAtMs: previous.endAtMs,
+          durationMs: previous.durationMs,
+          observedAtMs: previous.observedAtMs,
+        },
         pending: { firstSeenAtMs: current.observedAtMs },
       });
       expect(store.listEvents()).toEqual([]);

@@ -400,27 +400,6 @@ export const formatQuotaEstimateVerbose = (upstream: UpstreamRecord, report: Usa
   ].join('\n');
 };
 
-export const formatQuotaEstimateInsufficient = (upstream: UpstreamRecord, window: UsageWindowReport['window'], upstreamUsedPercent: number): string =>
-  [
-    blockTitle('Quota estimate'),
-    '',
-    bold(upstream.name),
-    label('Active limit', usageWindowBucketLabel(window)),
-    `Reset in ${formatDurationUntil(window.endAt)}`,
-    `${bold('Upstream primary used')}:`,
-    formatProgressPercent(upstreamUsedPercent),
-    '',
-    'Not enough usage data yet. The limit probably just reset, so go make some requests.',
-  ].join('\n');
-
-export const formatQuotaEstimateInsufficientNotification = (upstreamUsedPercent: number): string =>
-  [
-    `${bold('Upstream primary used')}:`,
-    formatProgressPercent(upstreamUsedPercent),
-    '',
-    'Not enough usage data yet. The limit probably just reset, so go make some requests.',
-  ].join('\n');
-
 export const formatUsageLeaderboard = (report: UsageLeaderboardReport): string => [
   `${blockTitle('Leaderboard')} ${bold(`${report.days}d`)}`,
   label('Window', `${code(report.startAt)} -> ${code(report.endAt)}`),

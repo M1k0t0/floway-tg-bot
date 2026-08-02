@@ -5,7 +5,6 @@ import {
   formatInfo,
   formatKeys,
   formatQuotaEstimate,
-  formatQuotaEstimateInsufficient,
   formatQuotaEstimateNotification,
   formatQuotaEstimateVerbose,
   formatPrimaryWindowNotification,
@@ -215,40 +214,6 @@ describe('formatters', () => {
     expect(text).not.toContain('<b>Quota estimate</b>');
     expect(text).not.toContain('Reset in ');
     expect(text).not.toContain('Estimate only');
-  });
-
-  it('formats low-information quota estimates after a limit refresh', () => {
-    const upstream: UpstreamRecord = {
-      id: 'up_a',
-      kind: 'codex',
-      name: 'Codex main',
-      enabled: true,
-      sort_order: 1,
-      created_at: '2026-06-21T00:00:00.000Z',
-      updated_at: '2026-06-21T00:00:00.000Z',
-      flag_overrides: {},
-      flag_defaults: {},
-      disabled_public_model_ids: [],
-      proxy_fallback_list: [],
-      model_prefix: null,
-      color: null,
-      config: {},
-      state: null,
-    };
-
-    const text = formatQuotaEstimateInsufficient(
-      upstream,
-      {
-        label: 'Primary window',
-        startAt: '2026-06-15T00:00:00.000Z',
-        endAt: '2026-06-22T00:00:00.000Z',
-        startHour: '2026-06-15T00',
-        endHour: '2026-06-22T00',
-      },
-      0.4,
-    );
-    expect(text).toContain('<b>Upstream primary used</b>:\n[|              ] <b>0.40%</b>');
-    expect(text).toContain('Not enough usage data yet. The limit probably just reset, so go make some requests.');
   });
 
   it('formats leaderboard rows and escapes usernames', () => {

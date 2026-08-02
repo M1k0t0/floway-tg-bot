@@ -5,1289 +5,303 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { BindingStore } from '../src/db.js';
+import {
+  BindingStore,
+  type NewPrimaryWindowEvent,
+  type PrimaryWindowFacts,
+} from '../src/db.js';
 import { PrimaryWindowNotifier } from '../src/primary-window-notifier.js';
-import type { SanitizedExportSnapshot, UpstreamRecord } from '../src/types.js';
+import type {
+  AuthMeResponse,
+  FlowayAdminUser,
+  SanitizedExportSnapshot,
+  UpstreamRecord,
+} from '../src/types.js';
 
 const tempDirs: string[] = [];
 const stores: BindingStore[] = [];
 
+const USER: AuthMeResponse = {
+  user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
+  viaApiKey: false,
+  apiKey: null,
+};
+
+const ADMIN_USERS: FlowayAdminUser[] = [
+  { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-01T00:00:00.000Z' },
+];
+
+const EMPTY_SNAPSHOT: SanitizedExportSnapshot = {
+  exportedAt: '2026-06-01T05:05:00.000Z',
+  users: [{ id: 7, username: 'alice', deletedAt: null }],
+  apiKeys: [{
+    id: 'key_a',
+    userId: 7,
+    name: 'Alice key',
+    createdAt: '2026-06-01T00:00:00.000Z',
+    upstreamIds: null,
+    deletedAt: null,
+    dumpRetentionSeconds: null,
+    responsesRetentionSeconds: 0,
+  }],
+  usage: [],
+};
+
 afterEach(() => {
+  vi.useRealTimers();
   for (const store of stores.splice(0)) store.close();
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-  vi.useRealTimers();
 });
 
 describe('PrimaryWindowNotifier', () => {
-  it('seeds current primary windows, then notifies once after the reset advances', async () => {
+  it('silently seeds the first provider observation', async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-06-21T00:00:00.000Z'));
+    vi.setSystemTime('2026-06-01T04:55:00.000Z');
     const store = createStore();
-    store.upsert({
-      telegramUserId: '12345',
-      flowayUserId: 7,
-      username: 'alice',
-      flowaySession: 'session-alice',
+    bindAlice(store);
+    const upstream = quotaUpstream('2026-06-01T00:00:00.000Z', '2026-06-01T05:00:00.000Z', '2026-06-01T04:50:00.000Z', 80);
+    const runtime = createRuntime(store, () => [upstream]);
+
+    await runtime.notifier.pollOnce();
+
+    expect(store.getCursor('up_a')).toMatchObject({
+      revision: 0,
+      anchor: { startAtMs: Date.parse('2026-06-01T00:00:00.000Z'), endAtMs: Date.parse('2026-06-01T05:00:00.000Z') },
+      pending: null,
     });
-
-    let currentUpstream = upstreamWithPrimaryReset('2026-06-22T00:00:00.000Z', 80);
-    let exportCalls = 0;
-    const messages: Array<{ chatId: string; text: string }> = [];
-    const snapshot: SanitizedExportSnapshot = {
-      exportedAt: '2026-06-22T00:05:00.000Z',
-      users: [
-        { id: 7, username: 'alice', deletedAt: null },
-        { id: 8, username: 'bob', deletedAt: null },
-      ],
-      apiKeys: [
-        { id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null, dumpRetentionSeconds: null, responsesRetentionSeconds: 0 },
-        { id: 'key_b', userId: 8, name: 'Bob key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null, dumpRetentionSeconds: null, responsesRetentionSeconds: 0 },
-      ],
-      usage: [
-        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-21T12', requests: 2, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '100', unitPrice: '0.000001' }] },
-        { keyId: 'key_a', model: 'm', upstream: 'up_b', modelKey: 'm', hour: '2026-06-21T12', requests: 9, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '999', unitPrice: '0.000001' }] },
-        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-22T00', requests: 1, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '50', unitPrice: '0.000001' }] },
-        { keyId: 'key_b', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-22T00', requests: 3, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '150', unitPrice: '0.000001' }] },
-      ],
-    };
-    const floway = {
-      listUpstreams: async () => [currentUpstream],
-      listUsers: async () => [
-        { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
-        { id: 8, username: 'bob', isAdmin: false, upstreamIds: null, createdAt: '2026-06-15T00:00:00.000Z' },
-        { id: 9, username: 'admin', isAdmin: true, upstreamIds: null, createdAt: '2026-06-15T00:00:00.000Z' },
-      ],
-      getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
-        viaApiKey: false,
-        apiKey: null,
-      }),
-      exportUsageSnapshot: async () => {
-        exportCalls += 1;
-        return snapshot;
-      },
-    };
-    const bot = {
-      telegram: {
-        sendMessage: async (chatId: string, text: string) => {
-          messages.push({ chatId, text });
-          return {};
-        },
-      },
-    };
-    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
-
-    await notifier.pollOnce();
-
-    expect(exportCalls).toBe(0);
-    expect(messages).toEqual([]);
-
-    vi.setSystemTime(new Date('2026-06-22T00:01:00.000Z'));
-    currentUpstream = upstreamWithPrimaryReset('2026-06-29T00:00:00.000Z', 12);
-    await notifier.pollOnce();
-    await notifier.pollOnce();
-
-    expect(exportCalls).toBe(1);
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).toMatchObject({ chatId: '12345' });
-    expect(messages[0]!.text).toContain('<b>Primary window refreshed</b>');
-    expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-15T00:00:00.000Z</code> -> <code>2026-06-22T00:00:00.000Z</code>');
-    expect(messages[0]!.text).toContain('<b>Your upstream tokens</b>: <b>100</b>');
-    expect(messages[0]!.text).toContain('<b>Upstream cost</b>: <b>$0.000100</b> / $0.000100');
-    expect(messages[0]!.text).toContain('<b>Upstream primary used</b>:\n[||||||||||||   ] <b>80.0%</b>');
-    expect(messages[0]!.text).toContain('<b>Estimated your used</b>:');
-    expect(messages[0]!.text).toContain('(Assumed 2 users)');
-    expect(messages[0]!.text).not.toContain('<b>12.0%</b>');
-    expect(messages[0]!.text).not.toContain('<b>Your share by tokens</b>');
-    expect(messages[0]!.text).not.toContain('<b>Your share by requests</b>');
-    expect(messages[0]!.text).not.toContain('<b>Your upstream cost</b>');
-    expect(messages[0]!.text).not.toContain('<b>All upstream cost</b>');
-    expect(messages[0]!.text).not.toContain('<b>Quota estimate</b>');
-    expect(messages[0]!.text).not.toContain('Reset in ');
-    expect(messages[0]!.text).not.toContain('Estimate only');
-    expect(messages[0]!.text).not.toContain('999');
+    expect(store.listEvents()).toEqual([]);
+    expect(store.listDeliveries()).toEqual([]);
+    expect(runtime.sendMessage).not.toHaveBeenCalled();
   });
 
-  it('notifies after an older stored state without a bucket key advances', async () => {
+  it('requires two provider observations before committing and delivering a natural refresh', async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-06-22T00:01:00.000Z'));
+    vi.setSystemTime('2026-06-01T04:55:00.000Z');
     const store = createStore();
-    store.upsert({
-      telegramUserId: '12345',
-      flowayUserId: 7,
-      username: 'alice',
-      flowaySession: 'session-alice',
-    });
-    store.upsertPrimaryWindowState({
-      telegramUserId: '12345',
-      upstreamId: 'up_a',
-      windowStartAt: '2026-06-08T00:00:00.000Z',
-      resetAfterAt: '2026-06-15T00:00:00.000Z',
-      usedPercent: 80,
-      quotaBucketKey: null,
-    });
+    bindAlice(store);
+    let upstream = quotaUpstream('2026-06-01T00:00:00.000Z', '2026-06-01T05:00:00.000Z', '2026-06-01T04:50:00.000Z', 80);
+    const runtime = createRuntime(store, () => [upstream]);
+    await runtime.notifier.pollOnce();
 
-    const messages: string[] = [];
-    const notifier = new PrimaryWindowNotifier({
-      store,
-      floway: {
-        listUpstreams: async () => [upstreamWithPrimaryReset('2026-06-22T00:00:00.000Z', 12)],
-        listUsers: async () => [],
-        getMe: async () => ({
-          user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
-          viaApiKey: false,
-          apiKey: null,
-        }),
-        exportUsageSnapshot: async () => emptySnapshot(),
-      },
-      bot: {
-        telegram: {
-          sendMessage: async (_chatId: string, text: string) => {
-            messages.push(text);
-            return {};
-          },
-        },
-      },
-      intervalSeconds: 60,
-    });
+    vi.setSystemTime('2026-06-01T05:02:00.000Z');
+    upstream = quotaUpstream('2026-06-01T05:00:00.000Z', '2026-06-01T10:00:00.000Z', '2026-06-01T05:01:00.000Z', 2);
+    await runtime.notifier.pollOnce();
+    expect(store.getCursor('up_a')).toMatchObject({ revision: 0, pending: { kind: 'natural', observationCount: 1 } });
+    expect(runtime.sendMessage).not.toHaveBeenCalled();
 
-    await notifier.pollOnce();
+    vi.setSystemTime('2026-06-01T05:03:00.000Z');
+    await runtime.notifier.pollOnce();
 
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).toContain('<b>Primary window refreshed</b>');
-    expect(store.getPrimaryWindowState('12345', 'up_a')).toMatchObject({
-      quotaBucketKey: 'premium',
-      windowStartAt: '2026-06-15T00:00:00.000Z',
-      resetAfterAt: '2026-06-22T00:00:00.000Z',
-    });
+    expect(store.getCursor('up_a')).toMatchObject({ revision: 1, pending: null });
+    expect(store.listEvents()).toEqual([expect.objectContaining({ kind: 'natural' })]);
+    expect(store.listDeliveries()).toEqual([expect.objectContaining({ status: 'sent', attempts: 1 })]);
+    expect(runtime.sendMessage).toHaveBeenCalledTimes(1);
+    expect(runtime.sendMessage.mock.calls[0]?.[1]).toContain('Provider-confirmed natural refresh');
   });
 
-  it('uses only the premium primary-window bucket when other buckets exist', async () => {
+  it('does not confirm a provider window before its exact start in the same hour', async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-06-22T12:00:00.000Z'));
+    vi.setSystemTime('2026-06-01T04:55:00.000Z');
     const store = createStore();
-    store.upsert({
-      telegramUserId: '12345',
-      flowayUserId: 7,
-      username: 'alice',
-      flowaySession: 'session-alice',
-    });
-    vi.setSystemTime(new Date('2026-06-23T00:00:00.000Z'));
+    bindAlice(store);
+    let upstream = quotaUpstream('2026-06-01T00:30:00.000Z', '2026-06-01T05:30:00.000Z', '2026-06-01T04:50:00.000Z', 80);
+    const runtime = createRuntime(store, () => [upstream]);
+    await runtime.notifier.pollOnce();
 
-    let currentUpstream: UpstreamRecord = {
-      ...upstreamWithPrimaryReset('2026-06-22T00:00:00.000Z', 80),
-      codex_quota: {
-        premium: {
-          observed_at: '2026-06-21T00:00:00.000Z',
-          active_limit: 'premium',
-          primary_window_minutes: 10080,
-          primary_reset_after_at: '2026-06-22T00:00:00.000Z',
-          primary_used_percent: 80,
-        },
-        enterprise: {
-          observed_at: '2026-06-21T00:01:00.000Z',
-          active_limit: 'enterprise',
-          primary_window_minutes: 10080,
-          primary_reset_after_at: '2026-06-29T00:00:00.000Z',
-          primary_used_percent: 12,
-        },
-      },
-    };
-    let exportCalls = 0;
-    const messages: Array<{ chatId: string; text: string }> = [];
-    const floway = {
-      listUpstreams: async () => [currentUpstream],
-      listUsers: async () => [],
-      getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
-        viaApiKey: false,
-        apiKey: null,
-      }),
-      exportUsageSnapshot: async () => {
-        exportCalls += 1;
-        return emptySnapshot();
-      },
-    };
-    const bot = {
-      telegram: {
-        sendMessage: async (chatId: string, text: string) => {
-          messages.push({ chatId, text });
-          return {};
-        },
-      },
-    };
-    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+    upstream = quotaUpstream('2026-06-01T05:30:00.000Z', '2026-06-01T10:30:00.000Z', '2026-06-01T05:05:00.000Z', 1);
+    vi.setSystemTime('2026-06-01T05:10:00.000Z');
+    await runtime.notifier.pollOnce();
+    await runtime.notifier.pollOnce();
+    expect(store.getCursor('up_a')).toMatchObject({ revision: 0, pending: { observationCount: 1 } });
+    expect(runtime.sendMessage).not.toHaveBeenCalled();
 
-    await notifier.pollOnce();
-
-    expect(messages).toEqual([]);
-    expect(exportCalls).toBe(0);
-    expect(store.getPrimaryWindowState('12345', 'up_a')).toMatchObject({
-      quotaBucketKey: 'premium',
-      windowStartAt: '2026-06-22T00:00:00.000Z',
-      resetAfterAt: '2026-06-29T00:00:00.000Z',
-      usedPercent: null,
-    });
-
-    currentUpstream = {
-      ...currentUpstream,
-      codex_quota: {
-        enterprise: currentUpstream.codex_quota!.enterprise!,
-      },
-    };
-    await notifier.pollOnce();
-
-    expect(messages).toEqual([]);
-    expect(exportCalls).toBe(0);
-    expect(store.getPrimaryWindowState('12345', 'up_a')).toBeNull();
+    vi.setSystemTime('2026-06-01T05:31:00.000Z');
+    await runtime.notifier.pollOnce();
+    expect(store.getCursor('up_a')?.revision).toBe(1);
+    expect(runtime.sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it('sends a catch-up notification when state is missing after the current primary window started', async () => {
+  it('keeps the canonical anchor stable across tolerated timestamp drift', async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-06-20T00:00:00.000Z'));
+    vi.setSystemTime('2026-06-08T00:00:00.000Z');
     const store = createStore();
-    store.upsert({
-      telegramUserId: '12345',
-      flowayUserId: 7,
-      username: 'alice',
-      flowaySession: 'session-alice',
-    });
-    vi.setSystemTime(new Date('2026-06-23T00:00:00.000Z'));
+    bindAlice(store);
+    let upstream = quotaUpstream('2026-06-01T00:00:00.000Z', '2026-06-08T00:00:00.000Z', '2026-06-07T23:00:00.000Z', 60);
+    const runtime = createRuntime(store, () => [upstream]);
+    await runtime.notifier.pollOnce();
+    const originalAnchor = store.getCursor('up_a')?.anchor;
 
-    const currentUpstream = upstreamWithPrimaryReset('2026-06-29T00:00:00.000Z', 18);
-    let exportCalls = 0;
-    const messages: Array<{ chatId: string; text: string }> = [];
-    const snapshot: SanitizedExportSnapshot = {
-      exportedAt: '2026-06-23T00:05:00.000Z',
-      users: [
-        { id: 7, username: 'alice', deletedAt: null },
-        { id: 8, username: 'bob', deletedAt: null },
-      ],
-      apiKeys: [
-        { id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null, dumpRetentionSeconds: null, responsesRetentionSeconds: 0 },
-        { id: 'key_b', userId: 8, name: 'Bob key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null, dumpRetentionSeconds: null, responsesRetentionSeconds: 0 },
-      ],
-      usage: [
-        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-21T12', requests: 4, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '200', unitPrice: '0.000001' }] },
-        { keyId: 'key_b', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-21T12', requests: 6, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '300', unitPrice: '0.000001' }] },
-        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-22T00', requests: 2, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '60', unitPrice: '0.000001' }] },
-        { keyId: 'key_b', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-22T00', requests: 1, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '40', unitPrice: '0.000001' }] },
-      ],
-    };
-    const floway = {
-      listUpstreams: async () => [currentUpstream],
-      listUsers: async () => [
-        { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
-        { id: 8, username: 'bob', isAdmin: false, upstreamIds: null, createdAt: '2026-06-15T00:00:00.000Z' },
-      ],
-      getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
-        viaApiKey: false,
-        apiKey: null,
-      }),
-      exportUsageSnapshot: async () => {
-        exportCalls += 1;
-        return snapshot;
-      },
-    };
-    const bot = {
-      telegram: {
-        sendMessage: async (chatId: string, text: string) => {
-          messages.push({ chatId, text });
-          return {};
-        },
-      },
-    };
-    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+    upstream = quotaUpstream('2026-06-01T04:00:00.000Z', '2026-06-08T04:00:00.000Z', '2026-06-08T00:01:00.000Z', 62);
+    await runtime.notifier.pollOnce();
+    expect(store.getCursor('up_a')?.anchor).toEqual(originalAnchor);
 
-    await notifier.pollOnce();
-    await notifier.pollOnce();
-
-    expect(exportCalls).toBe(1);
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).toMatchObject({ chatId: '12345' });
-    expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-15T00:00:00.000Z</code> -> <code>2026-06-22T00:00:00.000Z</code>');
-    expect(messages[0]!.text).toContain('<b>Your upstream tokens</b>: <b>200</b>');
-    expect(messages[0]!.text).toContain('<b>All upstream tokens</b>: <b>500</b>');
-    expect(messages[0]!.text).toContain('Primary quota estimate unavailable.');
-    expect(messages[0]!.text).not.toContain('<b>18.0%</b>');
-    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
+    upstream = quotaUpstream('2026-06-01T08:00:00.000Z', '2026-06-08T08:00:00.000Z', '2026-06-08T00:02:00.000Z', 63);
+    await runtime.notifier.pollOnce();
+    expect(store.getCursor('up_a')?.anchor).toEqual(originalAnchor);
+    expect(runtime.sendMessage).not.toHaveBeenCalled();
   });
 
-  it('sends a catch-up notification from stale Floway quota when state is missing after reset', async () => {
+  it('detects an early manual refresh for a five-hour window', async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-06-20T00:00:00.000Z'));
+    vi.setSystemTime('2026-06-01T02:50:00.000Z');
     const store = createStore();
-    store.upsert({
-      telegramUserId: '12345',
-      flowayUserId: 7,
-      username: 'alice',
-      flowaySession: 'session-alice',
-    });
-    vi.setSystemTime(new Date('2026-06-23T00:00:00.000Z'));
+    bindAlice(store);
+    let upstream = quotaUpstream('2026-06-01T00:00:00.000Z', '2026-06-01T05:00:00.000Z', '2026-06-01T02:45:00.000Z', 70);
+    const runtime = createRuntime(store, () => [upstream]);
+    await runtime.notifier.pollOnce();
 
-    const currentUpstream = upstreamWithPrimaryReset('2026-06-22T00:00:00.000Z', 80);
-    let exportCalls = 0;
-    const messages: Array<{ chatId: string; text: string }> = [];
-    const snapshot: SanitizedExportSnapshot = {
-      exportedAt: '2026-06-23T00:05:00.000Z',
-      users: [{ id: 7, username: 'alice', deletedAt: null }],
-      apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null, dumpRetentionSeconds: null, responsesRetentionSeconds: 0 }],
-      usage: [
-        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-21T12', requests: 4, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '200', unitPrice: '0.000001' }] },
-      ],
-    };
-    const floway = {
-      listUpstreams: async () => [currentUpstream],
-      listUsers: async () => [
-        { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
-      ],
-      getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
-        viaApiKey: false,
-        apiKey: null,
-      }),
-      exportUsageSnapshot: async () => {
-        exportCalls += 1;
-        return snapshot;
-      },
-    };
-    const bot = {
-      telegram: {
-        sendMessage: async (chatId: string, text: string) => {
-          messages.push({ chatId, text });
-          return {};
-        },
-      },
-    };
-    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+    upstream = quotaUpstream('2026-06-01T03:00:00.000Z', '2026-06-01T08:00:00.000Z', '2026-06-01T03:01:00.000Z', 4);
+    vi.setSystemTime('2026-06-01T03:02:00.000Z');
+    await runtime.notifier.pollOnce();
+    await runtime.notifier.pollOnce();
 
-    await notifier.pollOnce();
-    await notifier.pollOnce();
-
-    expect(exportCalls).toBe(1);
-    expect(messages).toHaveLength(1);
-    expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-15T00:00:00.000Z</code> -> <code>2026-06-22T00:00:00.000Z</code>');
-    expect(messages[0]!.text).toContain('<b>Upstream primary used</b>:\n[||||||||||||   ] <b>80.0%</b>');
-    expect(messages[0]!.text).not.toContain('Primary quota estimate unavailable.');
-    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
+    expect(store.listEvents()).toEqual([expect.objectContaining({
+      kind: 'manual',
+      effectivePreviousUsageEndAtMs: Date.parse('2026-06-01T03:00:00.000Z'),
+    })]);
+    expect(runtime.sendMessage.mock.calls[0]?.[1]).toContain('Early/manual provider refresh');
   });
 
-  it('backfills the previous window when old code already advanced state without recording a notification', async () => {
+  it('preserves the cursor and never fabricates resets while quota is missing or malformed', async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-06-20T00:00:00.000Z'));
+    vi.setSystemTime('2026-06-01T04:55:00.000Z');
     const store = createStore();
-    store.upsert({
-      telegramUserId: '12345',
-      flowayUserId: 7,
-      username: 'alice',
-      flowaySession: 'session-alice',
-    });
-    vi.setSystemTime(new Date('2026-06-23T00:00:00.000Z'));
-    store.upsertPrimaryWindowState({
-      telegramUserId: '12345',
-      upstreamId: 'up_a',
-      windowStartAt: '2026-06-22T00:00:00.000Z',
-      resetAfterAt: '2026-06-29T00:00:00.000Z',
-      quotaBucketKey: 'premium',
-      usedPercent: 18,
-    });
+    bindAlice(store);
+    let upstream = quotaUpstream('2026-06-01T00:00:00.000Z', '2026-06-01T05:00:00.000Z', '2026-06-01T04:50:00.000Z', 80);
+    const runtime = createRuntime(store, () => [upstream]);
+    await runtime.notifier.pollOnce();
+    const anchor = store.getCursor('up_a')?.anchor;
 
-    const currentUpstream = upstreamWithPrimaryReset('2026-06-29T00:00:00.000Z', 42);
-    let exportCalls = 0;
-    const messages: Array<{ chatId: string; text: string }> = [];
-    const snapshot: SanitizedExportSnapshot = {
-      exportedAt: '2026-06-23T00:05:00.000Z',
-      users: [{ id: 7, username: 'alice', deletedAt: null }],
-      apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null, dumpRetentionSeconds: null, responsesRetentionSeconds: 0 }],
-      usage: [
-        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-21T12', requests: 4, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '200', unitPrice: '0.000001' }] },
-      ],
-    };
-    const floway = {
-      listUpstreams: async () => [currentUpstream],
-      listUsers: async () => [
-        { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
-      ],
-      getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
-        viaApiKey: false,
-        apiKey: null,
-      }),
-      exportUsageSnapshot: async () => {
-        exportCalls += 1;
-        return snapshot;
-      },
-    };
-    const bot = {
-      telegram: {
-        sendMessage: async (chatId: string, text: string) => {
-          messages.push({ chatId, text });
-          return {};
-        },
-      },
-    };
-    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+    vi.setSystemTime('2026-06-02T05:00:00.000Z');
+    upstream = { ...upstream, codex_quota: null };
+    await runtime.notifier.pollOnce();
+    upstream = { ...upstream, codex_quota: { premium: { observed_at: 'bad', active_limit: 'premium' } } };
+    await runtime.notifier.pollOnce();
 
-    await notifier.pollOnce();
-    await notifier.pollOnce();
-
-    expect(exportCalls).toBe(1);
-    expect(messages).toHaveLength(1);
-    expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-15T00:00:00.000Z</code> -> <code>2026-06-22T00:00:00.000Z</code>');
-    expect(messages[0]!.text).toContain('<b>Your upstream tokens</b>: <b>200</b>');
-    expect(messages[0]!.text).toContain('Primary quota estimate unavailable.');
-    expect(messages[0]!.text).not.toContain('<b>18.0%</b>');
-    expect(messages[0]!.text).not.toContain('<b>42.0%</b>');
-    expect(store.getPrimaryWindowNotification('12345', 'up_a', '2026-06-15T00:00:00.000Z', '2026-06-22T00:00:00.000Z')).not.toBeNull();
-    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
-    expect(store.getPrimaryWindowState('12345', 'up_a')?.usedPercent).toBe(42);
+    expect(store.getCursor('up_a')?.anchor).toEqual(anchor);
+    expect(store.listEvents()).toEqual([]);
+    expect(runtime.sendMessage).not.toHaveBeenCalled();
   });
 
-  it('backfills the previous window when old code advanced state and Floway quota is missing', async () => {
+  it('advances the cursor before Telegram delivery and retries a failed send after restart', async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-06-20T00:00:00.000Z'));
-    const store = createStore();
-    store.upsert({
-      telegramUserId: '12345',
-      flowayUserId: 7,
-      username: 'alice',
-      flowaySession: 'session-alice',
-    });
-    vi.setSystemTime(new Date('2026-06-23T00:00:00.000Z'));
-    store.upsertPrimaryWindowState({
-      telegramUserId: '12345',
-      upstreamId: 'up_a',
-      windowStartAt: '2026-06-22T00:00:00.000Z',
-      resetAfterAt: '2026-06-29T00:00:00.000Z',
-      quotaBucketKey: 'premium',
-      usedPercent: 18,
-    });
+    vi.setSystemTime('2026-06-01T04:55:00.000Z');
+    const { dbPath, secretKey, store } = createFileStore();
+    bindAlice(store);
+    let upstream = quotaUpstream('2026-06-01T00:00:00.000Z', '2026-06-01T05:00:00.000Z', '2026-06-01T04:50:00.000Z', 80);
+    const failing = createRuntime(store, () => [upstream]);
+    failing.sendMessage.mockRejectedValueOnce(new Error('temporary Telegram failure'));
+    await failing.notifier.pollOnce();
 
-    const currentUpstream = { ...upstreamWithPrimaryReset('2026-06-29T00:00:00.000Z', 18), codex_quota: null };
-    let exportCalls = 0;
-    const messages: Array<{ chatId: string; text: string }> = [];
-    const snapshot: SanitizedExportSnapshot = {
-      exportedAt: '2026-06-23T00:05:00.000Z',
-      users: [{ id: 7, username: 'alice', deletedAt: null }],
-      apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null, dumpRetentionSeconds: null, responsesRetentionSeconds: 0 }],
-      usage: [
-        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-21T12', requests: 4, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '200', unitPrice: '0.000001' }] },
-      ],
-    };
-    const floway = {
-      listUpstreams: async () => [currentUpstream],
-      listUsers: async () => [
-        { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
-      ],
-      getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
-        viaApiKey: false,
-        apiKey: null,
-      }),
-      exportUsageSnapshot: async () => {
-        exportCalls += 1;
-        return snapshot;
-      },
-    };
-    const bot = {
-      telegram: {
-        sendMessage: async (chatId: string, text: string) => {
-          messages.push({ chatId, text });
-          return {};
-        },
-      },
-    };
-    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+    upstream = quotaUpstream('2026-06-01T05:00:00.000Z', '2026-06-01T10:00:00.000Z', '2026-06-01T05:01:00.000Z', 1);
+    vi.setSystemTime('2026-06-01T05:02:00.000Z');
+    await failing.notifier.pollOnce();
+    vi.setSystemTime('2026-06-01T05:03:00.000Z');
+    await failing.notifier.pollOnce();
 
-    await notifier.pollOnce();
-    await notifier.pollOnce();
+    expect(store.getCursor('up_a')?.revision).toBe(1);
+    expect(store.listDeliveries()).toEqual([expect.objectContaining({ status: 'pending', attempts: 1 })]);
+    store.close();
+    stores.splice(stores.indexOf(store), 1);
 
-    expect(exportCalls).toBe(1);
-    expect(messages).toHaveLength(1);
-    expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-15T00:00:00.000Z</code> -> <code>2026-06-22T00:00:00.000Z</code>');
-    expect(messages[0]!.text).toContain('<b>Your upstream tokens</b>: <b>200</b>');
-    expect(messages[0]!.text).toContain('Primary quota estimate unavailable.');
-    expect(store.getPrimaryWindowNotification('12345', 'up_a', '2026-06-15T00:00:00.000Z', '2026-06-22T00:00:00.000Z')).not.toBeNull();
-    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
-    expect(store.getPrimaryWindowState('12345', 'up_a')?.usedPercent).toBe(18);
+    vi.setSystemTime('2026-06-01T05:03:31.000Z');
+    const reopened = track(new BindingStore(dbPath, secretKey));
+    const restarted = createRuntime(reopened, () => [upstream]);
+    await restarted.notifier.pollOnce();
+
+    expect(reopened.listEvents()).toHaveLength(1);
+    expect(reopened.listDeliveries()).toEqual([expect.objectContaining({ status: 'sent', attempts: 2 })]);
+    expect(restarted.sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it('refreshes current window state after a backfill notification was already recorded', async () => {
+  it('allows only one of two notifier instances to claim a pending delivery', async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-06-20T00:00:00.000Z'));
-    const store = createStore();
-    store.upsert({
-      telegramUserId: '12345',
-      flowayUserId: 7,
-      username: 'alice',
-      flowaySession: 'session-alice',
-    });
-    vi.setSystemTime(new Date('2026-06-23T00:00:00.000Z'));
-    store.upsertPrimaryWindowState({
-      telegramUserId: '12345',
-      upstreamId: 'up_a',
-      windowStartAt: '2026-06-22T00:00:00.000Z',
-      resetAfterAt: '2026-06-29T00:00:00.000Z',
-      quotaBucketKey: 'premium',
-      usedPercent: 18,
-    });
-    store.upsertPrimaryWindowNotification({
-      telegramUserId: '12345',
-      upstreamId: 'up_a',
-      windowStartAt: '2026-06-15T00:00:00.000Z',
-      resetAfterAt: '2026-06-22T00:00:00.000Z',
-    });
+    vi.setSystemTime('2026-06-01T05:03:00.000Z');
+    const { dbPath, secretKey, store: firstStore } = createFileStore();
+    const binding = bindAlice(firstStore);
+    seedPendingDelivery(firstStore, binding.bindingId);
+    const secondStore = track(new BindingStore(dbPath, secretKey));
+    const upstream = quotaUpstream('2026-06-01T05:00:00.000Z', '2026-06-01T10:00:00.000Z', '2026-06-01T05:01:00.000Z', 1);
+    const sendMessage = vi.fn(async () => undefined);
+    const first = createRuntime(firstStore, () => [upstream], sendMessage);
+    const second = createRuntime(secondStore, () => [upstream], sendMessage);
 
-    const messages: Array<{ chatId: string; text: string }> = [];
-    const floway = {
-      listUpstreams: async () => [upstreamWithPrimaryReset('2026-06-29T00:00:00.000Z', 42)],
-      listUsers: async () => {
-        throw new Error('users should not be listed without notification candidates');
-      },
-      getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
-        viaApiKey: false,
-        apiKey: null,
-      }),
-      exportUsageSnapshot: async () => {
-        throw new Error('usage export should not be called for an already-sent notification');
-      },
-    };
-    const bot = {
-      telegram: {
-        sendMessage: async (chatId: string, text: string) => {
-          messages.push({ chatId, text });
-          return {};
-        },
-      },
-    };
-    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+    await Promise.all([first.notifier.pollOnce(), second.notifier.pollOnce()]);
 
-    await notifier.pollOnce();
-
-    expect(messages).toEqual([]);
-    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
-    expect(store.getPrimaryWindowState('12345', 'up_a')?.usedPercent).toBe(42);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(firstStore.listDeliveries()).toEqual([expect.objectContaining({ status: 'sent' })]);
   });
 
-  it('does not notify when Floway reports a future primary window before it starts', async () => {
+  it('sends the reset alert with an unavailable section when enrichment fails', async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-06-21T00:00:00.000Z'));
+    vi.setSystemTime('2026-06-01T05:03:00.000Z');
     const store = createStore();
-    store.upsert({
-      telegramUserId: '12345',
-      flowayUserId: 7,
-      username: 'alice',
-      flowaySession: 'session-alice',
-    });
-    vi.setSystemTime(new Date('2026-06-28T10:25:00.000Z'));
-    store.upsertPrimaryWindowState({
-      telegramUserId: '12345',
-      upstreamId: 'up_a',
-      windowStartAt: '2026-06-28T00:51:17.124Z',
-      resetAfterAt: '2026-07-05T00:51:17.124Z',
-      quotaBucketKey: 'premium',
-      usedPercent: 3,
-    });
-    store.upsertPrimaryWindowNotification({
-      telegramUserId: '12345',
-      upstreamId: 'up_a',
-      windowStartAt: '2026-06-21T00:51:16.847Z',
-      resetAfterAt: '2026-06-28T00:51:16.847Z',
-    });
+    const binding = bindAlice(store);
+    seedPendingDelivery(store, binding.bindingId);
+    const upstream = quotaUpstream('2026-06-01T05:00:00.000Z', '2026-06-01T10:00:00.000Z', '2026-06-01T05:01:00.000Z', 1);
+    const runtime = createRuntime(store, () => [upstream]);
+    runtime.exportUsageSnapshot.mockRejectedValue(new Error('bad export'));
 
-    const messages: Array<{ chatId: string; text: string }> = [];
-    const floway = {
-      listUpstreams: async () => [upstreamWithPrimaryReset('2026-07-12T00:51:16.847Z', 4)],
-      listUsers: async () => {
-        throw new Error('users should not be listed without notification candidates');
-      },
-      getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
-        viaApiKey: false,
-        apiKey: null,
-      }),
-      exportUsageSnapshot: async () => {
-        throw new Error('usage export should not be called for a future window');
-      },
-    };
-    const bot = {
-      telegram: {
-        sendMessage: async (chatId: string, text: string) => {
-          messages.push({ chatId, text });
-          return {};
-        },
-      },
-    };
-    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+    await runtime.notifier.pollOnce();
 
-    await notifier.pollOnce();
-
-    expect(messages).toEqual([]);
-    expect(store.getPrimaryWindowNotification('12345', 'up_a', '2026-06-28T00:51:16.847Z', '2026-07-05T00:51:16.847Z')).toBeNull();
-    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-07-05T00:51:17.124Z');
-    expect(store.getPrimaryWindowState('12345', 'up_a')?.usedPercent).toBe(3);
+    expect(runtime.sendMessage).toHaveBeenCalledTimes(1);
+    const text = runtime.sendMessage.mock.calls[0]?.[1] as string;
+    expect(text).toContain('Primary window refreshed');
+    expect(text).toContain('attribution are unavailable');
+    expect(text.length).toBeLessThanOrEqual(3_800);
   });
 
-  it('does not treat same-window reset boundary drift within five hours as a refresh', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-06-21T00:00:00.000Z'));
-    const store = createStore();
-    store.upsert({
-      telegramUserId: '12345',
-      flowayUserId: 7,
-      username: 'alice',
-      flowaySession: 'session-alice',
-    });
-    vi.setSystemTime(new Date('2026-06-28T10:25:00.000Z'));
-    store.upsertPrimaryWindowState({
-      telegramUserId: '12345',
-      upstreamId: 'up_a',
-      windowStartAt: '2026-06-28T00:51:17.124Z',
-      resetAfterAt: '2026-07-05T00:51:17.124Z',
-      quotaBucketKey: 'premium',
-      usedPercent: 3,
-    });
-    store.upsertPrimaryWindowNotification({
-      telegramUserId: '12345',
-      upstreamId: 'up_a',
-      windowStartAt: '2026-06-21T00:51:16.847Z',
-      resetAfterAt: '2026-06-28T00:51:16.847Z',
-    });
-
-    const messages: Array<{ chatId: string; text: string }> = [];
-    const floway = {
-      listUpstreams: async () => [upstreamWithPrimaryReset('2026-07-05T05:51:17.124Z', 3)],
-      listUsers: async () => {
-        throw new Error('users should not be listed without notification candidates');
-      },
-      getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
-        viaApiKey: false,
-        apiKey: null,
-      }),
-      exportUsageSnapshot: async () => {
-        throw new Error('usage export should not be called for timestamp drift');
-      },
-    };
-    const bot = {
-      telegram: {
-        sendMessage: async (chatId: string, text: string) => {
-          messages.push({ chatId, text });
-          return {};
-        },
-      },
-    };
-    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
-
-    await notifier.pollOnce();
-
-    expect(messages).toEqual([]);
-    expect(store.getPrimaryWindowNotification('12345', 'up_a', '2026-06-28T05:51:17.124Z', '2026-07-05T05:51:17.124Z')).toBeNull();
-    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-07-05T05:51:17.124Z');
-    expect(store.getPrimaryWindowState('12345', 'up_a')?.usedPercent).toBe(3);
-  });
-
-  it('reports a manually refreshed overlapping window only beyond the five-hour boundary debounce', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-06-21T00:00:00.000Z'));
-    const store = createStore();
-    store.upsert({
-      telegramUserId: '12345',
-      flowayUserId: 7,
-      username: 'alice',
-      flowaySession: 'session-alice',
-    });
-    vi.setSystemTime(new Date('2026-06-30T10:25:00.000Z'));
-    store.upsertPrimaryWindowState({
-      telegramUserId: '12345',
-      upstreamId: 'up_a',
-      windowStartAt: '2026-06-28T00:51:18.169Z',
-      resetAfterAt: '2026-07-05T00:51:18.169Z',
-      quotaBucketKey: 'premium',
-      usedPercent: 5,
-    });
-    store.upsertPrimaryWindowNotification({
-      telegramUserId: '12345',
-      upstreamId: 'up_a',
-      windowStartAt: '2026-06-21T00:51:18.025Z',
-      resetAfterAt: '2026-06-28T00:51:18.025Z',
-    });
-
-    const messages: Array<{ chatId: string; text: string }> = [];
-    const snapshot: SanitizedExportSnapshot = {
-      exportedAt: '2026-06-30T10:25:00.000Z',
-      users: [{ id: 7, username: 'alice', deletedAt: null }],
-      apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null, dumpRetentionSeconds: null, responsesRetentionSeconds: 0 }],
-      usage: [
-        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-28T12', requests: 1, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '100', unitPrice: '0.000001' }] },
-        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-29T12', requests: 1, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '999', unitPrice: '0.000001' }] },
-      ],
-    };
-    const floway = {
-      listUpstreams: async () => [upstreamWithPrimaryReset('2026-07-06T06:01:31.799Z', 6)],
-      listUsers: async () => [
-        { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
-      ],
-      getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
-        viaApiKey: false,
-        apiKey: null,
-      }),
-      exportUsageSnapshot: async () => snapshot,
-    };
-    const bot = {
-      telegram: {
-        sendMessage: async (chatId: string, text: string) => {
-          messages.push({ chatId, text });
-          return {};
-        },
-      },
-    };
-    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
-
-    await notifier.pollOnce();
-
-    expect(messages).toHaveLength(1);
-    expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-28T00:51:18.169Z</code> -> <code>2026-06-29T06:01:31.799Z</code>');
-    expect(messages[0]!.text).toContain('<b>Window note</b>: Upstream refreshed this primary window early; this is not a natural cycle.');
-    expect(messages[0]!.text).toContain('<b>Your upstream tokens</b>: <b>100</b>');
-    expect(messages[0]!.text).not.toContain('999');
-    expect(store.getPrimaryWindowNotification('12345', 'up_a', '2026-06-22T06:01:31.799Z', '2026-06-29T06:01:31.799Z')).toBeNull();
-    expect(store.getPrimaryWindowNotification('12345', 'up_a', '2026-06-28T00:51:18.169Z', '2026-06-29T06:01:31.799Z')).not.toBeNull();
-    expect(store.getPrimaryWindowState('12345', 'up_a')?.windowStartAt).toBe('2026-06-29T06:01:31.799Z');
-    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-07-06T06:01:31.799Z');
-    expect(store.getPrimaryWindowState('12345', 'up_a')?.usedPercent).toBe(6);
-
-    await notifier.pollOnce();
-
-    expect(messages).toHaveLength(1);
-    expect(store.getPrimaryWindowNotification('12345', 'up_a', '2026-06-22T06:01:31.799Z', '2026-06-29T06:01:31.799Z')).toBeNull();
-  });
-
-  it('treats a current window that starts in the previous end hour as a natural refresh', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-06-21T00:00:00.000Z'));
-    const store = createStore();
-    store.upsert({
-      telegramUserId: '12345',
-      flowayUserId: 7,
-      username: 'alice',
-      flowaySession: 'session-alice',
-    });
-    vi.setSystemTime(new Date('2026-07-05T00:10:00.000Z'));
-    store.upsertPrimaryWindowState({
-      telegramUserId: '12345',
-      upstreamId: 'up_a',
-      windowStartAt: '2026-06-28T00:51:18.169Z',
-      resetAfterAt: '2026-07-05T00:51:18.169Z',
-      quotaBucketKey: 'premium',
-      usedPercent: 5,
-    });
-    store.upsertPrimaryWindowNotification({
-      telegramUserId: '12345',
-      upstreamId: 'up_a',
-      windowStartAt: '2026-06-21T00:51:18.025Z',
-      resetAfterAt: '2026-06-28T00:51:18.025Z',
-    });
-
-    const messages: Array<{ chatId: string; text: string }> = [];
-    const snapshot: SanitizedExportSnapshot = {
-      exportedAt: '2026-07-05T00:10:00.000Z',
-      users: [{ id: 7, username: 'alice', deletedAt: null }],
-      apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null, dumpRetentionSeconds: null, responsesRetentionSeconds: 0 }],
-      usage: [
-        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-07-04T12', requests: 1, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '100', unitPrice: '0.000001' }] },
-      ],
-    };
-    const floway = {
-      listUpstreams: async () => [upstreamWithPrimaryReset('2026-07-12T00:30:00.000Z', 6)],
-      listUsers: async () => [
-        { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
-      ],
-      getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
-        viaApiKey: false,
-        apiKey: null,
-      }),
-      exportUsageSnapshot: async () => snapshot,
-    };
-    const bot = {
-      telegram: {
-        sendMessage: async (chatId: string, text: string) => {
-          messages.push({ chatId, text });
-          return {};
-        },
-      },
-    };
-    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
-
-    await notifier.pollOnce();
-
-    expect(messages).toHaveLength(1);
-    expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-28T00:51:18.169Z</code> -> <code>2026-07-05T00:51:18.169Z</code>');
-    expect(messages[0]!.text).not.toContain('<b>Window note</b>');
-    expect(store.getPrimaryWindowNotification('12345', 'up_a', '2026-06-28T00:30:00.000Z', '2026-07-05T00:30:00.000Z')).toBeNull();
-    expect(store.getPrimaryWindowNotification('12345', 'up_a', '2026-06-28T00:51:18.169Z', '2026-07-05T00:51:18.169Z')).not.toBeNull();
-    expect(store.getPrimaryWindowState('12345', 'up_a')?.windowStartAt).toBe('2026-07-05T00:30:00.000Z');
-    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-07-12T00:30:00.000Z');
-    expect(store.getPrimaryWindowState('12345', 'up_a')?.usedPercent).toBe(6);
-  });
-
-  it('does not let a premature notification ledger suppress the real reset notification', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-06-21T00:00:00.000Z'));
-    const store = createStore();
-    store.upsert({
-      telegramUserId: '12345',
-      flowayUserId: 7,
-      username: 'alice',
-      flowaySession: 'session-alice',
-    });
-    store.upsertPrimaryWindowState({
-      telegramUserId: '12345',
-      upstreamId: 'up_a',
-      windowStartAt: '2026-06-28T00:51:17.124Z',
-      resetAfterAt: '2026-07-05T00:51:17.124Z',
-      quotaBucketKey: 'premium',
-      usedPercent: 3,
-    });
-    vi.setSystemTime(new Date('2026-06-28T10:25:00.000Z'));
-    store.upsertPrimaryWindowNotification({
-      telegramUserId: '12345',
-      upstreamId: 'up_a',
-      windowStartAt: '2026-06-28T00:51:16.847Z',
-      resetAfterAt: '2026-07-05T00:51:16.847Z',
-    });
-    vi.setSystemTime(new Date('2026-07-05T00:52:00.000Z'));
-
-    const messages: Array<{ chatId: string; text: string }> = [];
-    const snapshot: SanitizedExportSnapshot = {
-      exportedAt: '2026-07-05T00:52:00.000Z',
-      users: [{ id: 7, username: 'alice', deletedAt: null }],
-      apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null, dumpRetentionSeconds: null, responsesRetentionSeconds: 0 }],
-      usage: [
-        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-07-04T12', requests: 1, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '100', unitPrice: '0.000001' }] },
-      ],
-    };
-    const floway = {
-      listUpstreams: async () => [upstreamWithPrimaryReset('2026-07-12T00:51:16.847Z', 4)],
-      listUsers: async () => [
-        { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
-      ],
-      getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
-        viaApiKey: false,
-        apiKey: null,
-      }),
-      exportUsageSnapshot: async () => snapshot,
-    };
-    const bot = {
-      telegram: {
-        sendMessage: async (chatId: string, text: string) => {
-          messages.push({ chatId, text });
-          return {};
-        },
-      },
-    };
-    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
-
-    await notifier.pollOnce();
-
-    expect(messages).toHaveLength(1);
-    expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-28T00:51:17.124Z</code> -> <code>2026-07-05T00:51:17.124Z</code>');
-    expect(messages[0]!.text).toContain('<b>Your upstream tokens</b>: <b>100</b>');
-    expect(store.getPrimaryWindowNotification('12345', 'up_a', '2026-06-28T00:51:17.124Z', '2026-07-05T00:51:17.124Z')?.sentAt)
-      .toBe('2026-07-05T00:52:00.000Z');
-    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-07-12T00:51:16.847Z');
-  });
-
-  it('does not backfill a previous window that ended before the binding existed', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-06-23T00:00:00.000Z'));
-    const store = createStore();
-    store.upsert({
-      telegramUserId: '12345',
-      flowayUserId: 7,
-      username: 'alice',
-      flowaySession: 'session-alice',
-    });
-    store.upsertPrimaryWindowState({
-      telegramUserId: '12345',
-      upstreamId: 'up_a',
-      windowStartAt: '2026-06-22T00:00:00.000Z',
-      resetAfterAt: '2026-06-29T00:00:00.000Z',
-      quotaBucketKey: 'premium',
-      usedPercent: 18,
-    });
-
-    const messages: Array<{ chatId: string; text: string }> = [];
-    const floway = {
-      listUpstreams: async () => [upstreamWithPrimaryReset('2026-06-29T00:00:00.000Z', 18)],
-      listUsers: async () => [
-        { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-23T00:00:00.000Z' },
-      ],
-      getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
-        viaApiKey: false,
-        apiKey: null,
-      }),
-      exportUsageSnapshot: async () => {
-        throw new Error('usage export should not be called without notification candidates');
-      },
-    };
-    const bot = {
-      telegram: {
-        sendMessage: async (chatId: string, text: string) => {
-          messages.push({ chatId, text });
-          return {};
-        },
-      },
-    };
-    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
-
-    await notifier.pollOnce();
-
-    expect(messages).toEqual([]);
-    expect(store.getPrimaryWindowNotification('12345', 'up_a', '2026-06-15T00:00:00.000Z', '2026-06-22T00:00:00.000Z')).toBeNull();
-    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
-  });
-
-  it('uses local state to notify when Floway quota is stale after the reset time', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-06-21T00:00:00.000Z'));
-    const store = createStore();
-    store.upsert({
-      telegramUserId: '12345',
-      flowayUserId: 7,
-      username: 'alice',
-      flowaySession: 'session-alice',
-    });
-
-    let currentUpstream = upstreamWithPrimaryReset('2026-06-22T00:00:00.000Z', 80);
-    let exportCalls = 0;
-    const messages: Array<{ chatId: string; text: string }> = [];
-    const snapshot: SanitizedExportSnapshot = {
-      exportedAt: '2026-06-22T00:05:00.000Z',
-      users: [{ id: 7, username: 'alice', deletedAt: null }],
-      apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null, dumpRetentionSeconds: null, responsesRetentionSeconds: 0 }],
-      usage: [
-        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-21T12', requests: 2, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '100', unitPrice: '0.000001' }] },
-      ],
-    };
-    const floway = {
-      listUpstreams: async () => [currentUpstream],
-      listUsers: async () => [
-        { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
-      ],
-      getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
-        viaApiKey: false,
-        apiKey: null,
-      }),
-      exportUsageSnapshot: async () => {
-        exportCalls += 1;
-        return snapshot;
-      },
-    };
-    const bot = {
-      telegram: {
-        sendMessage: async (chatId: string, text: string) => {
-          messages.push({ chatId, text });
-          return {};
-        },
-      },
-    };
-    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
-
-    await notifier.pollOnce();
-    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-22T00:00:00.000Z');
-
-    currentUpstream = { ...currentUpstream, codex_quota: null };
-    await notifier.pollOnce();
-    expect(messages).toHaveLength(0);
-    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-22T00:00:00.000Z');
-
-    vi.setSystemTime(new Date('2026-06-22T00:01:00.000Z'));
-    await notifier.pollOnce();
-    await notifier.pollOnce();
-
-    expect(exportCalls).toBe(1);
-    expect(messages).toHaveLength(1);
-    expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-15T00:00:00.000Z</code> -> <code>2026-06-22T00:00:00.000Z</code>');
-    expect(messages[0]!.text).toContain('<b>Upstream primary used</b>:\n[||||||||||||   ] <b>80.0%</b>');
-    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
-  });
-
-  it('uses the reset hour when local state detects stale Floway quota', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-06-21T00:00:00.000Z'));
-    const store = createStore();
-    store.upsert({
-      telegramUserId: '12345',
-      flowayUserId: 7,
-      username: 'alice',
-      flowaySession: 'session-alice',
-    });
-
-    let currentUpstream = upstreamWithPrimaryReset('2026-06-22T00:51:00.000Z', 80);
-    const messages: Array<{ chatId: string; text: string }> = [];
-    const snapshot: SanitizedExportSnapshot = {
-      exportedAt: '2026-06-22T00:10:00.000Z',
-      users: [{ id: 7, username: 'alice', deletedAt: null }],
-      apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null, dumpRetentionSeconds: null, responsesRetentionSeconds: 0 }],
-      usage: [
-        { keyId: 'key_a', model: 'm', upstream: 'up_a', modelKey: 'm', hour: '2026-06-21T12', requests: 2, pricingSelector: {}, metrics: [{ metric: 'input_tokens', quantity: '100', unitPrice: '0.000001' }] },
-      ],
-    };
-    const floway = {
-      listUpstreams: async () => [currentUpstream],
-      listUsers: async () => [
-        { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
-      ],
-      getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
-        viaApiKey: false,
-        apiKey: null,
-      }),
-      exportUsageSnapshot: async () => snapshot,
-    };
-    const bot = {
-      telegram: {
-        sendMessage: async (chatId: string, text: string) => {
-          messages.push({ chatId, text });
-          return {};
-        },
-      },
-    };
-    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
-
-    await notifier.pollOnce();
-
-    currentUpstream = { ...currentUpstream, codex_quota: null };
-    vi.setSystemTime(new Date('2026-06-22T00:10:00.000Z'));
-    await notifier.pollOnce();
-
-    expect(messages).toHaveLength(1);
-    expect(messages[0]!.text).toContain('<b>Previous window</b>: <code>2026-06-15T00:51:00.000Z</code> -> <code>2026-06-22T00:51:00.000Z</code>');
-    expect(store.getPrimaryWindowState('12345', 'up_a')?.windowStartAt).toBe('2026-06-22T00:51:00.000Z');
-    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:51:00.000Z');
-  });
-
-  it('clears stale primary window state when an upstream no longer supports Codex windows', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-06-23T00:01:00.000Z'));
-    const store = createStore();
-    store.upsert({
-      telegramUserId: '12345',
-      flowayUserId: 7,
-      username: 'alice',
-      flowaySession: 'session-alice',
-    });
-    store.upsertPrimaryWindowState({
-      telegramUserId: '12345',
-      upstreamId: 'up_a',
-      windowStartAt: '2026-06-15T00:00:00.000Z',
-      resetAfterAt: '2026-06-22T00:00:00.000Z',
-      quotaBucketKey: 'premium',
-      usedPercent: 80,
-    });
-
-    let exportCalls = 0;
-    const messages: Array<{ chatId: string; text: string }> = [];
-    const unsupportedUpstream = {
-      ...upstreamWithPrimaryReset('2026-06-22T00:00:00.000Z', 80),
-      kind: 'custom',
-      codex_quota: null,
-    };
-    const floway = {
-      listUpstreams: async () => [unsupportedUpstream],
-      listUsers: async () => [],
-      getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
-        viaApiKey: false,
-        apiKey: null,
-      }),
-      exportUsageSnapshot: async () => {
-        exportCalls += 1;
-        return emptySnapshot();
-      },
-    };
-    const bot = {
-      telegram: {
-        sendMessage: async (chatId: string, text: string) => {
-          messages.push({ chatId, text });
-          return {};
-        },
-      },
-    };
-    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
-
-    await notifier.pollOnce();
-
-    expect(exportCalls).toBe(0);
-    expect(messages).toHaveLength(0);
-    expect(store.getPrimaryWindowState('12345', 'up_a')).toBeNull();
-  });
-
-  it('does not notify for upstreams outside the bound user access list', async () => {
-    const store = createStore();
-    store.upsert({
-      telegramUserId: '12345',
-      flowayUserId: 7,
-      username: 'alice',
-      flowaySession: 'session-alice',
-    });
-    store.upsertPrimaryWindowState({
-      telegramUserId: '12345',
-      upstreamId: 'up_b',
-      windowStartAt: '2026-06-15T00:00:00.000Z',
-      resetAfterAt: '2026-06-22T00:00:00.000Z',
-      quotaBucketKey: 'premium',
-      usedPercent: 80,
-    });
-
-    let exportCalls = 0;
-    const floway = {
-      listUpstreams: async () => [upstreamWithPrimaryReset('2026-06-29T00:00:00.000Z', 0.4, 'up_b')],
-      listUsers: async () => [],
-      getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
-        viaApiKey: false,
-        apiKey: null,
-      }),
-      exportUsageSnapshot: async () => {
-        exportCalls += 1;
-        return emptySnapshot();
-      },
-    };
-    const bot = {
-      telegram: {
-        sendMessage: async () => ({}),
-      },
-    };
-    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
-
-    await notifier.pollOnce();
-
-    expect(exportCalls).toBe(0);
-    expect(store.getPrimaryWindowState('12345', 'up_b')).toBeNull();
-  });
-
-  it('retries notifications after Telegram send failures before advancing state', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-06-21T00:00:00.000Z'));
-    const store = createStore();
-    store.upsert({
-      telegramUserId: '12345',
-      flowayUserId: 7,
-      username: 'alice',
-      flowaySession: 'session-alice',
-    });
-
-    let currentUpstream = upstreamWithPrimaryReset('2026-06-22T00:00:00.000Z', 80);
-    let sendAttempts = 0;
-    const floway = {
-      listUpstreams: async () => [currentUpstream],
-      listUsers: async () => [
-        { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-15T00:00:00.000Z' },
-      ],
-      getMe: async () => ({
-        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
-        viaApiKey: false,
-        apiKey: null,
-      }),
-      exportUsageSnapshot: async () => emptySnapshot(),
-    };
-    const bot = {
-      telegram: {
-        sendMessage: async () => {
-          sendAttempts += 1;
-          if (sendAttempts === 1) throw new Error('telegram failed');
-          return {};
-        },
-      },
-    };
-    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
-
-    await notifier.pollOnce();
-    vi.setSystemTime(new Date('2026-06-22T00:01:00.000Z'));
-    currentUpstream = upstreamWithPrimaryReset('2026-06-29T00:00:00.000Z', 0.4);
-    await notifier.pollOnce();
-
-    expect(sendAttempts).toBe(1);
-    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-22T00:00:00.000Z');
-
-    await notifier.pollOnce();
-
-    expect(sendAttempts).toBe(2);
-    expect(store.getPrimaryWindowState('12345', 'up_a')?.resetAfterAt).toBe('2026-06-29T00:00:00.000Z');
-  });
-
-  it('waits for the active poll before stop resolves', async () => {
+  it('waits for an active observation poll before stopping', async () => {
     const store = createStore();
     let resolveUpstreams!: (upstreams: UpstreamRecord[]) => void;
-    const upstreams = new Promise<UpstreamRecord[]>(resolve => {
+    const upstreamPromise = new Promise<UpstreamRecord[]>(resolve => {
       resolveUpstreams = resolve;
     });
-    let listStarted = false;
-    const floway = {
-      listUpstreams: async () => {
-        listStarted = true;
-        return upstreams;
-      },
-      listUsers: async () => [],
-      getMe: async () => {
-        throw new Error('binding refresh should not run without bindings');
-      },
-      exportUsageSnapshot: async () => emptySnapshot(),
-    };
-    const bot = {
-      telegram: {
-        sendMessage: async () => ({}),
-      },
-    };
-    const notifier = new PrimaryWindowNotifier({ store, floway, bot, intervalSeconds: 60 });
+    const runtime = createRuntime(store, () => upstreamPromise);
 
-    notifier.start();
-    expect(listStarted).toBe(true);
-
-    const stopPromise = notifier.stop();
-    const earlyResult = await Promise.race([
-      stopPromise.then(() => 'stopped' as const),
-      Promise.resolve('pending' as const),
-    ]);
-    expect(earlyResult).toBe('pending');
+    const poll = runtime.notifier.pollOnce();
+    const stop = runtime.notifier.stop();
+    expect(await Promise.race([stop.then(() => 'stopped'), Promise.resolve('pending')])).toBe('pending');
 
     resolveUpstreams([]);
-    await stopPromise;
+    await poll;
+    await stop;
   });
 });
 
-const createStore = (): BindingStore => {
-  const dir = mkdtempSync(join(tmpdir(), 'floway-tg-bot-'));
-  tempDirs.push(dir);
-  const store = new BindingStore(join(dir, 'bot.sqlite'), randomBytes(32));
-  stores.push(store);
-  return store;
+const createRuntime = (
+  store: BindingStore,
+  upstreams: () => UpstreamRecord[] | Promise<UpstreamRecord[]>,
+  sendMessage = vi.fn(async () => undefined),
+) => {
+  const exportUsageSnapshot = vi.fn(async () => EMPTY_SNAPSHOT);
+  const floway = {
+    listUpstreams: vi.fn(async () => await upstreams()),
+    listUsers: vi.fn(async () => ADMIN_USERS),
+    getMe: vi.fn(async () => USER),
+    exportUsageSnapshot,
+  };
+  return {
+    notifier: new PrimaryWindowNotifier({ store, floway, bot: { telegram: { sendMessage } }, intervalSeconds: 300 }),
+    floway,
+    sendMessage,
+    exportUsageSnapshot,
+  };
 };
 
-const emptySnapshot = (): SanitizedExportSnapshot => ({
-  exportedAt: '2026-06-22T00:05:00.000Z',
-  users: [{ id: 7, username: 'alice', deletedAt: null }],
-  apiKeys: [{ id: 'key_a', userId: 7, name: 'Alice key', createdAt: '2026-06-15T00:00:00.000Z', upstreamIds: null, deletedAt: null, dumpRetentionSeconds: null, responsesRetentionSeconds: 0 }],
-  usage: [],
-});
-
-const upstreamWithPrimaryReset = (resetAfterAt: string, usedPercent: number, id = 'up_a'): UpstreamRecord => ({
-  id,
+const quotaUpstream = (
+  startAt: string,
+  endAt: string,
+  observedAt: string,
+  usedPercent: number,
+): UpstreamRecord => ({
+  id: 'up_a',
   kind: 'codex',
   name: 'Codex main',
   enabled: true,
   sort_order: 1,
-  created_at: '2026-06-15T00:00:00.000Z',
-  updated_at: '2026-06-15T00:00:00.000Z',
+  created_at: '2026-05-01T00:00:00.000Z',
+  updated_at: observedAt,
   flag_overrides: {},
   flag_defaults: {},
   disabled_public_model_ids: [],
@@ -1298,11 +312,70 @@ const upstreamWithPrimaryReset = (resetAfterAt: string, usedPercent: number, id 
   state: null,
   codex_quota: {
     premium: {
-      observed_at: resetAfterAt,
+      observed_at: observedAt,
       active_limit: 'premium',
-      primary_window_minutes: 10080,
-      primary_reset_after_at: resetAfterAt,
+      primary_window_minutes: (Date.parse(endAt) - Date.parse(startAt)) / 60_000,
+      primary_reset_after_at: endAt,
       primary_used_percent: usedPercent,
     },
   },
+});
+
+const bindAlice = (store: BindingStore) => store.replaceBinding({
+  telegramUserId: '100',
+  flowayUserId: 7,
+  username: 'alice',
+  flowaySession: 'session',
+}, Date.parse('2026-05-01T00:00:00.000Z'));
+
+const createStore = (): BindingStore => createFileStore().store;
+
+const createFileStore = (): { dbPath: string; secretKey: Buffer; store: BindingStore } => {
+  const dir = mkdtempSync(join(tmpdir(), 'floway-notifier-test-'));
+  tempDirs.push(dir);
+  const dbPath = join(dir, 'bot.sqlite');
+  const secretKey = randomBytes(32);
+  return { dbPath, secretKey, store: track(new BindingStore(dbPath, secretKey)) };
+};
+
+const track = (store: BindingStore): BindingStore => {
+  stores.push(store);
+  return store;
+};
+
+const seedPendingDelivery = (store: BindingStore, bindingId: number): void => {
+  const previous = facts('2026-06-01T00:00:00.000Z', '2026-06-01T05:00:00.000Z', '2026-06-01T04:50:00.000Z', 80);
+  const current = facts('2026-06-01T05:00:00.000Z', '2026-06-01T10:00:00.000Z', '2026-06-01T05:01:00.000Z', 1);
+  store.seedCursor('up_a', previous);
+  store.stagePendingCandidate('up_a', 0, {
+    kind: 'natural',
+    startAtMs: current.startAtMs,
+    endAtMs: current.endAtMs,
+    durationMs: current.durationMs,
+    observedAtMs: current.observedAtMs,
+    firstSeenAtMs: Date.parse('2026-06-01T05:02:00.000Z'),
+  });
+  const event: NewPrimaryWindowEvent = {
+    upstreamId: 'up_a',
+    fromRevision: 0,
+    toRevision: 1,
+    upstreamKind: 'codex',
+    upstreamName: 'Codex main',
+    kind: 'natural',
+    previous,
+    current,
+    detectedAtMs: Date.parse('2026-06-01T05:03:00.000Z'),
+    effectivePreviousUsageEndAtMs: null,
+  };
+  expect(store.commitTransition(0, event, [bindingId], Date.parse('2026-06-01T05:02:00.000Z')).status).toBe('committed');
+};
+
+const facts = (startAt: string, endAt: string, observedAt: string, usedPercent: number): PrimaryWindowFacts => ({
+  startAtMs: Date.parse(startAt),
+  endAtMs: Date.parse(endAt),
+  durationMs: Date.parse(endAt) - Date.parse(startAt),
+  observedAtMs: Date.parse(observedAt),
+  usedPercent,
+  quotaBucketKey: 'premium',
+  activeLimit: 'premium',
 });

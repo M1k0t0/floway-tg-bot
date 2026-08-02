@@ -406,6 +406,20 @@ describe('BindingStore delivery outbox', () => {
       .toMatchObject({ status: 'leased', attempts: 2, claimToken: 'worker-b' });
   });
 
+  it('rejects mutations from an expired lease before another worker reclaims it', () => {
+    const store = createStore();
+    const binding = store.replaceBinding({ telegramUserId: '100', flowayUserId: 1, username: 'alice', flowaySession: 'a' }, OBSERVED);
+    seedPending(store);
+    store.commitTransition(0, transition(), [binding.bindingId], current.observedAtMs);
+
+    const claim = store.claimDueDelivery({ nowMs: current.observedAtMs, leaseDurationMs: 1_000, claimToken: 'expired' })!;
+    const expiredAt = current.observedAtMs + 1_000;
+    expect(store.persistDeliveryPayload(claim.deliveryId, 'expired', 'payload', expiredAt)).toBe(false);
+    expect(store.markDeliveryRetry(claim.deliveryId, 'expired', expiredAt + 1_000, 'late', expiredAt)).toBe(false);
+    expect(store.markDeliverySkipped(claim.deliveryId, 'expired', 'late', expiredAt)).toBe(false);
+    expect(store.markDeliveryDead(claim.deliveryId, 'expired', 'late', expiredAt)).toBe(false);
+  });
+
   it('uses token CAS for payload, retry, sent, skipped, and dead transitions', () => {
     const store = createStore();
     const binding = store.replaceBinding({ telegramUserId: '100', flowayUserId: 1, username: 'alice', flowaySession: 'a' }, OBSERVED);

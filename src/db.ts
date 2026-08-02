@@ -744,8 +744,8 @@ export class BindingStore {
     validateText(payload, 'delivery payload');
     return this.db.prepare(`
       UPDATE primary_window_delivery SET payload = ?, updated_at_ms = ?
-      WHERE id = ? AND status = 'leased' AND claim_token = ?
-    `).run(payload, nowMs, deliveryId, claimToken).changes === 1;
+      WHERE id = ? AND status = 'leased' AND claim_token = ? AND claim_until_ms > ?
+    `).run(payload, nowMs, deliveryId, claimToken, nowMs).changes === 1;
   }
 
   markDeliverySent(deliveryId: number, claimToken: string, sentAtMs: number): boolean {
@@ -754,8 +754,8 @@ export class BindingStore {
       UPDATE primary_window_delivery SET
         status = 'sent', claim_token = NULL, claim_until_ms = NULL,
         sent_at_ms = ?, dead_at_ms = NULL, last_error = NULL, updated_at_ms = ?
-      WHERE id = ? AND status = 'leased' AND claim_token = ? AND payload IS NOT NULL
-    `).run(sentAtMs, sentAtMs, deliveryId, claimToken).changes === 1;
+      WHERE id = ? AND status = 'leased' AND claim_token = ? AND claim_until_ms > ? AND payload IS NOT NULL
+    `).run(sentAtMs, sentAtMs, deliveryId, claimToken, sentAtMs).changes === 1;
   }
 
   markDeliveryRetry(
@@ -771,8 +771,8 @@ export class BindingStore {
       UPDATE primary_window_delivery SET
         status = 'pending', next_attempt_at_ms = ?, claim_token = NULL, claim_until_ms = NULL,
         last_error = ?, updated_at_ms = ?
-      WHERE id = ? AND status = 'leased' AND claim_token = ?
-    `).run(nextAttemptAtMs, boundedError(lastError), nowMs, deliveryId, claimToken).changes === 1;
+      WHERE id = ? AND status = 'leased' AND claim_token = ? AND claim_until_ms > ?
+    `).run(nextAttemptAtMs, boundedError(lastError), nowMs, deliveryId, claimToken, nowMs).changes === 1;
   }
 
   markDeliverySkipped(
@@ -786,8 +786,8 @@ export class BindingStore {
       UPDATE primary_window_delivery SET
         status = 'skipped', claim_token = NULL, claim_until_ms = NULL,
         last_error = ?, updated_at_ms = ?
-      WHERE id = ? AND status = 'leased' AND claim_token = ?
-    `).run(reason === null ? null : boundedError(reason), nowMs, deliveryId, claimToken).changes === 1;
+      WHERE id = ? AND status = 'leased' AND claim_token = ? AND claim_until_ms > ?
+    `).run(reason === null ? null : boundedError(reason), nowMs, deliveryId, claimToken, nowMs).changes === 1;
   }
 
   markDeliveryDead(
@@ -801,8 +801,8 @@ export class BindingStore {
       UPDATE primary_window_delivery SET
         status = 'dead', claim_token = NULL, claim_until_ms = NULL,
         dead_at_ms = ?, last_error = ?, updated_at_ms = ?
-      WHERE id = ? AND status = 'leased' AND claim_token = ?
-    `).run(deadAtMs, boundedError(lastError), deadAtMs, deliveryId, claimToken).changes === 1;
+      WHERE id = ? AND status = 'leased' AND claim_token = ? AND claim_until_ms > ?
+    `).run(deadAtMs, boundedError(lastError), deadAtMs, deliveryId, claimToken, deadAtMs).changes === 1;
   }
 
   getDelivery(deliveryId: number): PrimaryWindowDelivery | null {

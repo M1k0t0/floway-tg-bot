@@ -499,7 +499,10 @@ export class BindingStore {
       const result = this.db.prepare(`
         UPDATE primary_window_cursor SET
           latest_start_at_ms = ?, latest_end_at_ms = ?, latest_duration_ms = ?, latest_observed_at_ms = ?,
-          latest_used_percent = ?, latest_quota_bucket_key = ?, latest_active_limit = ?
+          latest_used_percent = ?, latest_quota_bucket_key = ?, latest_active_limit = ?,
+          pending_kind = NULL, pending_start_at_ms = NULL, pending_end_at_ms = NULL,
+          pending_duration_ms = NULL, pending_observed_at_ms = NULL,
+          pending_first_seen_at_ms = NULL, pending_observation_count = NULL
         WHERE upstream_id = ? AND revision = ?
       `).run(
         observation.startAtMs,

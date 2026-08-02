@@ -217,7 +217,6 @@ export class PrimaryWindowNotifier {
     const anchor = cursorObservation(cursor, observation.bucketKey);
     const classification = classifyPrimaryQuotaTransition(anchor, observation);
     if (classification === 'same') {
-      if (cursor.pending) this.options.store.clearPendingCandidate(upstream.id, cursor.revision);
       this.options.store.updateSameObservation(upstream.id, cursor.revision, observationFacts(observation));
       return;
     }
@@ -232,7 +231,8 @@ export class PrimaryWindowNotifier {
     }
 
     const pendingObservationValue = pendingObservation(cursor, observation);
-    if (!matchesPrimaryQuotaCandidate(pendingObservationValue, observation)) {
+    if (cursor.pending.kind !== classification
+      || !matchesPrimaryQuotaCandidate(pendingObservationValue, observation)) {
       this.options.store.replacePendingCandidate(upstream.id, cursor.revision, {
         ...pendingCandidate(classification, observation, nowMs),
         observationCount: 1,

@@ -20,7 +20,7 @@ describe('formatters', () => {
   it('splits long Telegram HTML only at independently valid boundaries', () => {
     const text = [
       `<b>${'a'.repeat(60)}</b>`,
-      `<code>${'x<&>'.repeat(40)}</code>`,
+      `<code>${'x&lt;&amp;&gt;'.repeat(40)}</code>`,
       `<b>${'z'.repeat(60)}</b>`,
     ].join('\n');
     const chunks = splitMessage(text, 80);

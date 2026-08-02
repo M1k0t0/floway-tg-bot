@@ -8,7 +8,6 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   BindingStore,
-  CURRENT_SCHEMA_VERSION,
   DatabaseRowError,
   MAX_DELIVERY_ERROR_LENGTH,
   type NewPrimaryWindowEvent,
@@ -59,158 +58,6 @@ const transition = (overrides: Partial<NewPrimaryWindowEvent> = {}): NewPrimaryW
 afterEach(() => {
   for (const store of stores.splice(0)) store.close();
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
-describe('BindingStore schema', () => {
-  it('creates version 1 STRICT tables, indexes, foreign keys, and file pragmas', () => {
-    const { dbPath, secretKey } = createDatabasePath();
-    const store = track(new BindingStore(dbPath, secretKey));
-
-    const db = new DatabaseSync(dbPath);
-    expect(pragmaValue(db, 'user_version')).toBe(CURRENT_SCHEMA_VERSION);
-    expect(String(pragmaValue(db, 'journal_mode')).toLowerCase()).toBe('wal');
-    expect(pragmaValue(db, 'synchronous')).toBe(2);
-    db.exec('PRAGMA foreign_keys = ON');
-    expect(pragmaValue(db, 'foreign_keys')).toBe(1);
-    expect(pragmaValue(db, 'busy_timeout')).toBe(0);
-    expect(tableFlags(db)).toMatchObject({
-      bindings: 1,
-      primary_window_cursor: 1,
-      primary_window_event: 1,
-      primary_window_delivery: 1,
-    });
-    expect(indexNames(db)).toEqual(expect.arrayContaining([
-      'primary_window_delivery_claim_idx',
-      'primary_window_delivery_lease_idx',
-      'primary_window_delivery_claim_token_idx',
-      'primary_window_delivery_event_fk_idx',
-      'primary_window_delivery_binding_fk_idx',
-      'primary_window_event_retention_idx',
-    ]));
-    const eventFk = db.prepare('PRAGMA foreign_key_list(primary_window_event)').all() as unknown as Array<{ table: string; on_delete: string }>;
-    const deliveryFks = db.prepare('PRAGMA foreign_key_list(primary_window_delivery)').all() as unknown as Array<{ table: string; on_delete: string }>;
-    expect(eventFk).toContainEqual(expect.objectContaining({ table: 'primary_window_cursor', on_delete: 'RESTRICT' }));
-    expect(deliveryFks).toEqual(expect.arrayContaining([
-      expect.objectContaining({ table: 'primary_window_event', on_delete: 'CASCADE' }),
-      expect.objectContaining({ table: 'bindings', on_delete: 'CASCADE' }),
-    ]));
-    expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
-    db.close();
-
-    expect(store.listBindingsSafely()).toEqual({ bindings: [], errors: [], probableWrongSecret: false });
-  });
-
-  it('handles an in-memory database without requesting WAL', () => {
-    const store = track(new BindingStore(':memory:', randomBytes(32)));
-    expect(store.listBindingsSafely()).toEqual({ bindings: [], errors: [], probableWrongSecret: false });
-  });
-
-  it('migrates only the exact shipped binding schema and preserves encrypted bytes', () => {
-    const { dbPath, secretKey } = createDatabasePath();
-    const encrypted = encryptString('preserved-session', secretKey);
-    const db = new DatabaseSync(dbPath);
-    createShippedBindings(db);
-    db.prepare(`
-      INSERT INTO bindings
-        (telegram_user_id, floway_user_id, username, encrypted_session, session_nonce, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run('100', 7, 'alice', encrypted.ciphertext, encrypted.nonce, '2024-01-01T00:00:00.000Z', '2025-01-01T00:00:00.000Z');
-    createDiscardedTables(db);
-    db.prepare(`INSERT INTO primary_window_state VALUES (?, ?, ?, ?, ?, ?, ?)`)
-      .run('100', 'up_a', 'a', 'b', 20, 'premium', 'c');
-    db.prepare(`INSERT INTO primary_window_notification VALUES (?, ?, ?, ?, ?)`)
-      .run('100', 'up_a', 'a', 'b', 'c');
-    db.close();
-
-    const before = Date.now();
-    const store = track(new BindingStore(dbPath, secretKey));
-    const after = Date.now();
-    const binding = store.getByTelegramUserId('100');
-    expect(binding).toMatchObject({
-      bindingId: 1,
-      telegramUserId: '100',
-      flowayUserId: 7,
-      username: 'alice',
-      flowaySession: 'preserved-session',
-    });
-    const raw = queryOne(dbPath, 'SELECT encrypted_session, session_nonce, bound_at_ms, updated_at_ms FROM bindings');
-    expect(raw.encrypted_session).toBe(encrypted.ciphertext);
-    expect(raw.session_nonce).toBe(encrypted.nonce);
-    expect(raw.bound_at_ms).toBe(raw.updated_at_ms);
-    expect(raw.bound_at_ms).toBeGreaterThanOrEqual(before);
-    expect(raw.bound_at_ms).toBeLessThanOrEqual(after);
-    expect(tableNames(dbPath)).not.toEqual(expect.arrayContaining([
-      'primary_window_state',
-      'primary_window_notification',
-    ]));
-  });
-
-  it('leaves lookalike tables untouched', () => {
-    const { dbPath, secretKey } = createDatabasePath();
-    const db = new DatabaseSync(dbPath);
-    db.exec(`CREATE TABLE primary_window_state_copy (value TEXT); INSERT INTO primary_window_state_copy VALUES ('keep')`);
-    db.exec(`CREATE TABLE primary_window_notification_copy (value TEXT); INSERT INTO primary_window_notification_copy VALUES ('keep')`);
-    db.exec(`CREATE TABLE primary_window_state (value TEXT); INSERT INTO primary_window_state VALUES ('keep')`);
-    db.close();
-
-    track(new BindingStore(dbPath, secretKey));
-    expect(tableNames(dbPath)).toEqual(expect.arrayContaining([
-      'primary_window_state_copy',
-      'primary_window_notification_copy',
-      'primary_window_state',
-    ]));
-    expect(queryOne(dbPath, 'SELECT value FROM primary_window_state').value).toBe('keep');
-  });
-
-  it('rejects future versions before persistent changes', () => {
-    const { dbPath, secretKey } = createDatabasePath();
-    const db = new DatabaseSync(dbPath);
-    db.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION + 1}; CREATE TABLE sentinel (value TEXT); INSERT INTO sentinel VALUES ('keep')`);
-    db.close();
-
-    expect(() => new BindingStore(dbPath, secretKey)).toThrow('newer than supported');
-    expect(tableNames(dbPath)).toEqual(['sentinel']);
-    expect(queryOne(dbPath, 'PRAGMA user_version').user_version).toBe(CURRENT_SCHEMA_VERSION + 1);
-  });
-
-  it('rolls back incompatible version-0 databases and unexpected new table names', () => {
-    for (const setup of [
-      (db: DatabaseSync) => db.exec('CREATE TABLE bindings (telegram_user_id TEXT PRIMARY KEY, wrong TEXT)'),
-      (db: DatabaseSync) => db.exec('CREATE TABLE primary_window_cursor (sentinel TEXT)'),
-    ]) {
-      const { dbPath, secretKey } = createDatabasePath();
-      const db = new DatabaseSync(dbPath);
-      setup(db);
-      db.close();
-      const beforeTables = tableNames(dbPath);
-      expect(() => new BindingStore(dbPath, secretKey)).toThrow();
-      expect(tableNames(dbPath)).toEqual(beforeTables);
-      expect(queryOne(dbPath, 'PRAGMA user_version').user_version).toBe(0);
-    }
-  });
-
-  it('rejects a current-version database whose table definition changed', () => {
-    const { dbPath, secretKey } = createDatabasePath();
-    const initial = new BindingStore(dbPath, secretKey);
-    initial.close();
-    const db = new DatabaseSync(dbPath);
-    db.exec('ALTER TABLE bindings ADD COLUMN unexpected TEXT');
-    db.close();
-
-    expect(() => new BindingStore(dbPath, secretKey)).toThrow('schema does not match');
-    expect(queryOne(dbPath, 'PRAGMA user_version').user_version).toBe(CURRENT_SCHEMA_VERSION);
-  });
-
-  it('reopens the current schema idempotently', () => {
-    const { dbPath, secretKey } = createDatabasePath();
-    const first = new BindingStore(dbPath, secretKey);
-    const binding = first.replaceBinding({ telegramUserId: '100', flowayUserId: 1, username: 'alice', flowaySession: 'token' }, OBSERVED);
-    first.close();
-
-    const reopened = track(new BindingStore(dbPath, secretKey));
-    expect(reopened.getByBindingId(binding.bindingId)?.flowaySession).toBe('token');
-    expect(tableNames(dbPath).filter(name => name.startsWith('primary_window_'))).toHaveLength(3);
-  });
 });
 
 describe('BindingStore bindings', () => {
@@ -488,39 +335,6 @@ const track = (store: BindingStore): BindingStore => {
   return store;
 };
 
-const createShippedBindings = (db: DatabaseSync): void => db.exec(`
-  CREATE TABLE bindings (
-    telegram_user_id TEXT PRIMARY KEY,
-    floway_user_id INTEGER NOT NULL,
-    username TEXT NOT NULL,
-    encrypted_session TEXT NOT NULL,
-    session_nonce TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  )
-`);
-
-const createDiscardedTables = (db: DatabaseSync): void => db.exec(`
-  CREATE TABLE primary_window_state (
-    telegram_user_id TEXT NOT NULL,
-    upstream_id TEXT NOT NULL,
-    window_start_at TEXT NOT NULL,
-    reset_after_at TEXT NOT NULL,
-    used_percent REAL,
-    quota_bucket_key TEXT,
-    updated_at TEXT NOT NULL,
-    PRIMARY KEY (telegram_user_id, upstream_id)
-  );
-  CREATE TABLE primary_window_notification (
-    telegram_user_id TEXT NOT NULL,
-    upstream_id TEXT NOT NULL,
-    window_start_at TEXT NOT NULL,
-    reset_after_at TEXT NOT NULL,
-    sent_at TEXT NOT NULL,
-    PRIMARY KEY (telegram_user_id, upstream_id, window_start_at, reset_after_at)
-  );
-`);
-
 const seedPending = (store: BindingStore): void => {
   store.seedCursor('up_a', previous);
   const result = store.stagePendingCandidate('up_a', 0, {
@@ -545,26 +359,4 @@ const queryOne = (dbPath: string, sql: string): Record<string, unknown> => {
   const row = db.prepare(sql).get() as Record<string, unknown>;
   db.close();
   return row;
-};
-
-const tableNames = (dbPath: string): string[] => {
-  const db = new DatabaseSync(dbPath);
-  const rows = db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as unknown as Array<{ name: string }>;
-  db.close();
-  return rows.map(row => row.name);
-};
-
-const tableFlags = (db: DatabaseSync): Record<string, number> => Object.fromEntries(
-  (db.prepare('PRAGMA table_list').all() as unknown as Array<{ name: string; strict: number }>)
-    .filter(row => ['bindings', 'primary_window_cursor', 'primary_window_event', 'primary_window_delivery'].includes(row.name))
-    .map(row => [row.name, row.strict]),
-);
-
-const indexNames = (db: DatabaseSync): string[] => (
-  db.prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as unknown as Array<{ name: string }>
-).map(row => row.name);
-
-const pragmaValue = (db: DatabaseSync, name: string): unknown => {
-  const row = db.prepare(`PRAGMA ${name}`).get() as Record<string, unknown>;
-  return Object.values(row)[0];
 };

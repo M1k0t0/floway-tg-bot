@@ -9,22 +9,26 @@ validateMigrationRegistry(migrations);
 
 export const CURRENT_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0;
 
-export const applyMigrations = (db: DatabaseSync): void => {
-  let version = pragmaInteger(db, 'user_version');
-  assertSupportedVersion(version);
+export const applyMigrations = (db: DatabaseSync): void => applyMigrationRegistry(db, migrations);
 
-  while (version < CURRENT_SCHEMA_VERSION) {
+export const applyMigrationRegistry = (db: DatabaseSync, registry: readonly DatabaseMigration[]): void => {
+  validateMigrationRegistry(registry);
+  const currentVersion = registry.at(-1)?.version ?? 0;
+  let version = pragmaInteger(db, 'user_version');
+  assertSupportedVersion(version, currentVersion);
+
+  while (version < currentVersion) {
     db.exec('BEGIN IMMEDIATE');
     try {
       const lockedVersion = pragmaInteger(db, 'user_version');
-      assertSupportedVersion(lockedVersion);
-      if (lockedVersion >= CURRENT_SCHEMA_VERSION) {
+      assertSupportedVersion(lockedVersion, currentVersion);
+      if (lockedVersion >= currentVersion) {
         db.exec('COMMIT');
         version = lockedVersion;
         continue;
       }
 
-      const migration = migrations[lockedVersion];
+      const migration = registry[lockedVersion];
       if (!migration || migration.version !== lockedVersion + 1) {
         throw new Error(`No database migration is registered for version ${lockedVersion + 1}`);
       }
@@ -46,7 +50,7 @@ export const applyMigrations = (db: DatabaseSync): void => {
     }
   }
 
-  const current = migrations.at(-1);
+  const current = registry.at(-1);
   if (current) current.verify(db);
 };
 
@@ -60,9 +64,9 @@ export const validateMigrationRegistry = (registry: readonly DatabaseMigration[]
   }
 };
 
-const assertSupportedVersion = (version: number): void => {
-  if (version > CURRENT_SCHEMA_VERSION) {
-    throw new Error(`Database schema version ${version} is newer than supported version ${CURRENT_SCHEMA_VERSION}`);
+const assertSupportedVersion = (version: number, currentVersion: number): void => {
+  if (version > currentVersion) {
+    throw new Error(`Database schema version ${version} is newer than supported version ${currentVersion}`);
   }
 };
 

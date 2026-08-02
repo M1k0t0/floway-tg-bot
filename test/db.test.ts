@@ -429,6 +429,8 @@ describe('BindingStore delivery outbox', () => {
     const claim = store.claimDueDelivery({ nowMs: current.observedAtMs, leaseDurationMs: 1_000, claimToken: 'one' })!;
     expect(store.persistDeliveryPayload(claim.deliveryId, 'wrong', 'payload', current.observedAtMs)).toBe(false);
     expect(store.persistDeliveryPayload(claim.deliveryId, 'one', 'payload', current.observedAtMs)).toBe(true);
+    expect(store.persistDeliveryPayload(claim.deliveryId, 'one', 'different payload', current.observedAtMs)).toBe(false);
+    expect(store.getDelivery(claim.deliveryId)?.payload).toBe('payload');
     expect(store.markDeliveryRetry(claim.deliveryId, 'one', current.observedAtMs + 2_000, 'x'.repeat(2_000), current.observedAtMs + 1)).toBe(true);
     expect(store.getDelivery(claim.deliveryId)?.lastError).toHaveLength(MAX_DELIVERY_ERROR_LENGTH);
     expect(store.claimDueDelivery({ nowMs: current.observedAtMs + 1_999, leaseDurationMs: 1_000 })).toBeNull();

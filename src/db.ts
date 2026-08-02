@@ -495,23 +495,25 @@ export class BindingStore {
     validateText(upstreamId, 'upstream id');
     assertSafeInteger(expectedRevision, 'cursor revision', 0);
     validateFacts(observation);
-    const result = this.db.prepare(`
-      UPDATE primary_window_cursor SET
-        latest_start_at_ms = ?, latest_end_at_ms = ?, latest_duration_ms = ?, latest_observed_at_ms = ?,
-        latest_used_percent = ?, latest_quota_bucket_key = ?, latest_active_limit = ?
-      WHERE upstream_id = ? AND revision = ?
-    `).run(
-      observation.startAtMs,
-      observation.endAtMs,
-      observation.durationMs,
-      observation.observedAtMs,
-      observation.usedPercent,
-      observation.quotaBucketKey,
-      observation.activeLimit,
-      upstreamId,
-      expectedRevision,
-    );
-    return this.cursorMutationResult(upstreamId, expectedRevision, Number(result.changes));
+    return this.immediateTransaction(() => {
+      const result = this.db.prepare(`
+        UPDATE primary_window_cursor SET
+          latest_start_at_ms = ?, latest_end_at_ms = ?, latest_duration_ms = ?, latest_observed_at_ms = ?,
+          latest_used_percent = ?, latest_quota_bucket_key = ?, latest_active_limit = ?
+        WHERE upstream_id = ? AND revision = ?
+      `).run(
+        observation.startAtMs,
+        observation.endAtMs,
+        observation.durationMs,
+        observation.observedAtMs,
+        observation.usedPercent,
+        observation.quotaBucketKey,
+        observation.activeLimit,
+        upstreamId,
+        expectedRevision,
+      );
+      return this.cursorMutationResult(upstreamId, expectedRevision, Number(result.changes));
+    });
   }
 
   stagePendingCandidate(
@@ -520,22 +522,24 @@ export class BindingStore {
     candidate: Omit<PendingPrimaryWindowCandidate, 'observationCount'>,
   ): CursorMutationResult {
     validatePendingCandidate({ ...candidate, observationCount: 1 });
-    const result = this.db.prepare(`
-      UPDATE primary_window_cursor SET
-        pending_kind = ?, pending_start_at_ms = ?, pending_end_at_ms = ?, pending_duration_ms = ?,
-        pending_observed_at_ms = ?, pending_first_seen_at_ms = ?, pending_observation_count = 1
-      WHERE upstream_id = ? AND revision = ? AND pending_kind IS NULL
-    `).run(
-      candidate.kind,
-      candidate.startAtMs,
-      candidate.endAtMs,
-      candidate.durationMs,
-      candidate.observedAtMs,
-      candidate.firstSeenAtMs,
-      upstreamId,
-      expectedRevision,
-    );
-    return this.cursorMutationResult(upstreamId, expectedRevision, Number(result.changes), true);
+    return this.immediateTransaction(() => {
+      const result = this.db.prepare(`
+        UPDATE primary_window_cursor SET
+          pending_kind = ?, pending_start_at_ms = ?, pending_end_at_ms = ?, pending_duration_ms = ?,
+          pending_observed_at_ms = ?, pending_first_seen_at_ms = ?, pending_observation_count = 1
+        WHERE upstream_id = ? AND revision = ? AND pending_kind IS NULL
+      `).run(
+        candidate.kind,
+        candidate.startAtMs,
+        candidate.endAtMs,
+        candidate.durationMs,
+        candidate.observedAtMs,
+        candidate.firstSeenAtMs,
+        upstreamId,
+        expectedRevision,
+      );
+      return this.cursorMutationResult(upstreamId, expectedRevision, Number(result.changes), true);
+    });
   }
 
   replacePendingCandidate(
@@ -544,34 +548,38 @@ export class BindingStore {
     candidate: PendingPrimaryWindowCandidate,
   ): CursorMutationResult {
     validatePendingCandidate(candidate);
-    const result = this.db.prepare(`
-      UPDATE primary_window_cursor SET
-        pending_kind = ?, pending_start_at_ms = ?, pending_end_at_ms = ?, pending_duration_ms = ?,
-        pending_observed_at_ms = ?, pending_first_seen_at_ms = ?, pending_observation_count = ?
-      WHERE upstream_id = ? AND revision = ?
-    `).run(
-      candidate.kind,
-      candidate.startAtMs,
-      candidate.endAtMs,
-      candidate.durationMs,
-      candidate.observedAtMs,
-      candidate.firstSeenAtMs,
-      candidate.observationCount,
-      upstreamId,
-      expectedRevision,
-    );
-    return this.cursorMutationResult(upstreamId, expectedRevision, Number(result.changes));
+    return this.immediateTransaction(() => {
+      const result = this.db.prepare(`
+        UPDATE primary_window_cursor SET
+          pending_kind = ?, pending_start_at_ms = ?, pending_end_at_ms = ?, pending_duration_ms = ?,
+          pending_observed_at_ms = ?, pending_first_seen_at_ms = ?, pending_observation_count = ?
+        WHERE upstream_id = ? AND revision = ?
+      `).run(
+        candidate.kind,
+        candidate.startAtMs,
+        candidate.endAtMs,
+        candidate.durationMs,
+        candidate.observedAtMs,
+        candidate.firstSeenAtMs,
+        candidate.observationCount,
+        upstreamId,
+        expectedRevision,
+      );
+      return this.cursorMutationResult(upstreamId, expectedRevision, Number(result.changes));
+    });
   }
 
   clearPendingCandidate(upstreamId: string, expectedRevision: number): CursorMutationResult {
-    const result = this.db.prepare(`
-      UPDATE primary_window_cursor SET
-        pending_kind = NULL, pending_start_at_ms = NULL, pending_end_at_ms = NULL,
-        pending_duration_ms = NULL, pending_observed_at_ms = NULL,
-        pending_first_seen_at_ms = NULL, pending_observation_count = NULL
-      WHERE upstream_id = ? AND revision = ?
-    `).run(upstreamId, expectedRevision);
-    return this.cursorMutationResult(upstreamId, expectedRevision, Number(result.changes));
+    return this.immediateTransaction(() => {
+      const result = this.db.prepare(`
+        UPDATE primary_window_cursor SET
+          pending_kind = NULL, pending_start_at_ms = NULL, pending_end_at_ms = NULL,
+          pending_duration_ms = NULL, pending_observed_at_ms = NULL,
+          pending_first_seen_at_ms = NULL, pending_observation_count = NULL
+        WHERE upstream_id = ? AND revision = ?
+      `).run(upstreamId, expectedRevision);
+      return this.cursorMutationResult(upstreamId, expectedRevision, Number(result.changes));
+    });
   }
 
   commitTransition(
@@ -744,7 +752,7 @@ export class BindingStore {
     validateText(payload, 'delivery payload');
     return this.db.prepare(`
       UPDATE primary_window_delivery SET payload = ?, updated_at_ms = ?
-      WHERE id = ? AND status = 'leased' AND claim_token = ? AND claim_until_ms > ?
+      WHERE id = ? AND status = 'leased' AND claim_token = ? AND claim_until_ms > ? AND payload IS NULL
     `).run(payload, nowMs, deliveryId, claimToken, nowMs).changes === 1;
   }
 

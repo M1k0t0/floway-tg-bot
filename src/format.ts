@@ -35,14 +35,24 @@ const blockTitle = (name: string): string => bold(name);
 export const splitMessage = (text: string, maxLength = MAX_TELEGRAM_MESSAGE): string[] => {
   if (text.length <= maxLength) return [text];
   const chunks: string[] = [];
-  let rest = text;
-  while (rest.length > maxLength) {
-    const cut = Math.max(rest.lastIndexOf('\n', maxLength), rest.lastIndexOf(' ', maxLength));
-    const index = cut > maxLength * 0.5 ? cut : maxLength;
-    chunks.push(rest.slice(0, index).trimEnd());
-    rest = rest.slice(index).trimStart();
+  let current = '';
+  for (const line of text.split('\n')) {
+    const separator = current ? '\n' : '';
+    if (current.length + separator.length + line.length <= maxLength) {
+      current += `${separator}${line}`;
+      continue;
+    }
+    if (current) {
+      chunks.push(current);
+      current = '';
+    }
+    if (line.length <= maxLength) {
+      current = line;
+      continue;
+    }
+    for (const part of splitOversizedLine(line, maxLength)) chunks.push(part);
   }
-  if (rest) chunks.push(rest);
+  if (current) chunks.push(current);
   return chunks;
 };
 
@@ -506,6 +516,27 @@ const formatModelsCache = (upstream: UpstreamRecord): string => {
   const fetched = cache.fetchedAt ? code(formatTimestamp(cache.fetchedAt)) : 'never';
   const lastError = cache.lastError ? `, last error ${code(cache.lastError.message)} at ${code(formatTimestamp(cache.lastError.at))}` : '';
   return `fetched ${fetched}${lastError}`;
+};
+
+const splitOversizedLine = (line: string, maxLength: number): string[] => {
+  const plain = line
+    .replace(/<[^>]*>/g, '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+  const escaped = html(plain);
+  const chunks: string[] = [];
+  let rest = escaped;
+  while (rest.length > maxLength) {
+    let cut = rest.lastIndexOf(' ', maxLength);
+    if (cut < maxLength / 2) cut = maxLength;
+    while (cut > 0 && rest.lastIndexOf('&', cut) > rest.lastIndexOf(';', cut)) cut -= 1;
+    if (cut === 0) cut = maxLength;
+    chunks.push(rest.slice(0, cut).trimEnd());
+    rest = rest.slice(cut).trimStart();
+  }
+  if (rest) chunks.push(rest);
+  return chunks;
 };
 
 const truncateCodePoints = (value: string, maxLength: number): string => {

@@ -11,11 +11,31 @@ import {
   formatStartHelp,
   formatUpstreamList,
   formatUsageLeaderboard,
+  splitMessage,
 } from '../src/format.js';
 import type { ApiKeyRecord, Binding, UpstreamRecord } from '../src/types.js';
 import type { UsageLeaderboardReport, UsageQuotaEstimate, UsageWindowReport } from '../src/usage.js';
 
 describe('formatters', () => {
+  it('splits long Telegram HTML only at independently valid boundaries', () => {
+    const text = [
+      `<b>${'a'.repeat(60)}</b>`,
+      `<code>${'x<&>'.repeat(40)}</code>`,
+      `<b>${'z'.repeat(60)}</b>`,
+    ].join('\n');
+    const chunks = splitMessage(text, 80);
+
+    expect(chunks.length).toBeGreaterThan(3);
+    expect(chunks.every(chunk => chunk.length <= 80)).toBe(true);
+    for (const chunk of chunks) {
+      expect((chunk.match(/<b>/g) ?? []).length).toBe((chunk.match(/<\/b>/g) ?? []).length);
+      expect((chunk.match(/<code>/g) ?? []).length).toBe((chunk.match(/<\/code>/g) ?? []).length);
+      const lastAmpersand = chunk.lastIndexOf('&');
+      const lastSemicolon = chunk.lastIndexOf(';');
+      expect(lastAmpersand <= lastSemicolon || lastAmpersand === -1).toBe(true);
+    }
+  });
+
   it('escapes dynamic upstream fields for Telegram HTML', () => {
     const upstream: UpstreamRecord = {
       id: 'up_<a>&',

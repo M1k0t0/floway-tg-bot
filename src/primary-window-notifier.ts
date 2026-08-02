@@ -307,11 +307,11 @@ export class PrimaryWindowNotifier {
         this.options.store.deleteBinding({ bindingId: binding.bindingId, telegramUserId: binding.telegramUserId });
         return;
       }
-      const upstream = (await this.options.floway.listUpstreams()).find(item => item.id === event.upstreamId);
-      if (!upstream || !upstream.enabled || !canUseUpstream(me.user, upstream.id)) {
+      if (!canUseUpstream(me.user, event.upstreamId)) {
         this.options.store.markDeliverySkipped(delivery.deliveryId, claimToken, 'Upstream is no longer available to this binding', nowMs);
         return;
       }
+      const upstream = eventUpstream(event);
 
       let payload = delivery.payload;
       if (!payload) {
@@ -374,6 +374,24 @@ export class PrimaryWindowNotifier {
     }
   }
 }
+
+const eventUpstream = (event: PrimaryWindowEvent): UpstreamRecord => ({
+  id: event.upstreamId,
+  kind: event.upstreamKind,
+  name: event.upstreamName,
+  enabled: true,
+  sort_order: 0,
+  created_at: new Date(event.detectedAtMs).toISOString(),
+  updated_at: new Date(event.detectedAtMs).toISOString(),
+  flag_overrides: {},
+  flag_defaults: {},
+  disabled_public_model_ids: [],
+  proxy_fallback_list: [],
+  model_prefix: null,
+  color: null,
+  config: null,
+  state: null,
+});
 
 const observationFacts = (observation: PrimaryQuotaObservation): PrimaryWindowFacts => ({
   startAtMs: observation.startMs,

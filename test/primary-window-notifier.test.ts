@@ -99,6 +99,53 @@ describe('PrimaryWindowNotifier', () => {
     expect(runtime.sendMessage.mock.calls[0]?.[1]).toContain('Provider-confirmed natural refresh');
   });
 
+  it('stores the latest exact provider observation when confirming a candidate', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T04:55:00.000Z');
+    const store = createStore();
+    bindAlice(store);
+    let upstream = quotaUpstream('2026-06-01T00:00:00.000Z', '2026-06-01T05:00:00.000Z', '2026-06-01T04:50:00.000Z', 80);
+    const runtime = createRuntime(store, () => [upstream]);
+    await runtime.notifier.pollOnce();
+
+    vi.setSystemTime('2026-06-01T05:02:00.000Z');
+    upstream = quotaUpstream('2026-06-01T05:00:00.000Z', '2026-06-01T10:00:00.000Z', '2026-06-01T05:01:00.000Z', 2);
+    await runtime.notifier.pollOnce();
+    vi.setSystemTime('2026-06-01T05:03:00.000Z');
+    upstream = quotaUpstream('2026-06-01T05:01:00.000Z', '2026-06-01T10:01:00.000Z', '2026-06-01T05:02:00.000Z', 3);
+    await runtime.notifier.pollOnce();
+
+    expect(store.listEvents()).toEqual([expect.objectContaining({
+      current: expect.objectContaining({
+        startAtMs: Date.parse('2026-06-01T05:01:00.000Z'),
+        endAtMs: Date.parse('2026-06-01T10:01:00.000Z'),
+        observedAtMs: Date.parse('2026-06-01T05:02:00.000Z'),
+        usedPercent: 3,
+      }),
+    })]);
+  });
+
+  it('keeps a recipient when binding refresh temporarily fails during confirmation', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T04:55:00.000Z');
+    const store = createStore();
+    bindAlice(store);
+    let upstream = quotaUpstream('2026-06-01T00:00:00.000Z', '2026-06-01T05:00:00.000Z', '2026-06-01T04:50:00.000Z', 80);
+    const runtime = createRuntime(store, () => [upstream]);
+    await runtime.notifier.pollOnce();
+
+    vi.setSystemTime('2026-06-01T05:02:00.000Z');
+    upstream = quotaUpstream('2026-06-01T05:00:00.000Z', '2026-06-01T10:00:00.000Z', '2026-06-01T05:01:00.000Z', 2);
+    await runtime.notifier.pollOnce();
+    vi.setSystemTime('2026-06-01T05:03:00.000Z');
+    runtime.floway.getMe.mockRejectedValueOnce(new Error('temporary profile failure'));
+    await runtime.notifier.pollOnce();
+
+    expect(store.listEvents()).toHaveLength(1);
+    expect(store.listDeliveries()).toEqual([expect.objectContaining({ status: 'sent' })]);
+    expect(runtime.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
   it('does not confirm a provider window before its exact start in the same hour', async () => {
     vi.useFakeTimers();
     vi.setSystemTime('2026-06-01T04:55:00.000Z');

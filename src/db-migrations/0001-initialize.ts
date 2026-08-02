@@ -93,7 +93,7 @@ export const initializeDatabaseMigration: DatabaseMigration = {
   verify: verifyVersionOneSchema,
 };
 
-export const verifyVersionOneSchema = (db: DatabaseSync): void => {
+export function verifyVersionOneSchema(db: DatabaseSync): void {
   const existingTables = tableNames(db);
   for (const table of TABLE_NAMES) {
     if (!existingTables.includes(table)) throw new Error(`Required table ${table} is missing`);
@@ -111,7 +111,7 @@ export const verifyVersionOneSchema = (db: DatabaseSync): void => {
   if (schemaManifest(db) !== expectedVersionOneSchemaManifest()) {
     throw new Error('Database schema does not match the current definition');
   }
-};
+}
 
 const readLegacyBindings = (db: DatabaseSync): LegacyBindingRow[] => {
   if (!schemaMatches(tableInfo(db, 'bindings'), LEGACY_BINDING_COLUMNS) || !hasTableFlags(db, 'bindings', 0, 0)) {

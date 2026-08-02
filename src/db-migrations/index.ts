@@ -54,7 +54,7 @@ export const applyMigrationRegistry = (db: DatabaseSync, registry: readonly Data
   if (current) current.verify(db);
 };
 
-export const validateMigrationRegistry = (registry: readonly DatabaseMigration[]): void => {
+export function validateMigrationRegistry(registry: readonly DatabaseMigration[]): void {
   for (let index = 0; index < registry.length; index += 1) {
     const migration = registry[index];
     const expectedVersion = index + 1;
@@ -62,7 +62,7 @@ export const validateMigrationRegistry = (registry: readonly DatabaseMigration[]
       throw new Error(`Database migration registry must contain contiguous versions starting at 1; expected ${expectedVersion}`);
     }
   }
-};
+}
 
 const assertSupportedVersion = (version: number, currentVersion: number): void => {
   if (version > currentVersion) {

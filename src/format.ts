@@ -525,17 +525,17 @@ const splitOversizedLine = (line: string, maxLength: number): string[] => {
     .replace(/&gt;/g, '>')
     .replace(/&amp;/g, '&');
   const escaped = html(plain);
+  const tokens = escaped.match(/&(?:amp|lt|gt);|./gu) ?? [];
   const chunks: string[] = [];
-  let rest = escaped;
-  while (rest.length > maxLength) {
-    let cut = rest.lastIndexOf(' ', maxLength);
-    if (cut < maxLength / 2) cut = maxLength;
-    while (cut > 0 && rest.lastIndexOf('&', cut) > rest.lastIndexOf(';', cut)) cut -= 1;
-    if (cut === 0) cut = maxLength;
-    chunks.push(rest.slice(0, cut).trimEnd());
-    rest = rest.slice(cut).trimStart();
+  let current = '';
+  for (const token of tokens) {
+    if (current.length + token.length > maxLength && current) {
+      chunks.push(current.trimEnd());
+      current = '';
+    }
+    current += token;
   }
-  if (rest) chunks.push(rest);
+  if (current) chunks.push(current.trim());
   return chunks;
 };
 

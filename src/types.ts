@@ -35,6 +35,7 @@ export interface LoginResponse {
 }
 
 export interface Binding {
+  bindingId: number;
   telegramUserId: string;
   flowayUserId: number;
   username: string;

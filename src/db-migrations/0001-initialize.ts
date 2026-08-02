@@ -32,7 +32,7 @@ interface ColumnSignature {
   pk: number;
 }
 
-interface TableInfoRow extends ColumnSignature {}
+type TableInfoRow = ColumnSignature;
 
 interface TableListRow {
   name: string;

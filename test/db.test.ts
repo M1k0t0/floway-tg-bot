@@ -13,7 +13,6 @@ import {
   type NewPrimaryWindowEvent,
   type PrimaryWindowFacts,
 } from '../src/db.js';
-import { encryptString } from '../src/crypto.js';
 
 const tempDirs: string[] = [];
 const stores: BindingStore[] = [];

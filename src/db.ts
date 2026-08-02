@@ -583,6 +583,11 @@ export class BindingStore {
       if (!cursor.pending || cursor.pending.firstSeenAtMs !== candidateFirstSeenAtMs) {
         return { status: 'candidate-mismatch' };
       }
+      if (!factsExactlyEqual(event.previous, cursor.latest)
+        || event.kind !== cursor.pending.kind
+        || !eventMatchesPendingCandidate(event.current, cursor.pending)) {
+        return { status: 'candidate-mismatch' };
+      }
 
       const inserted = this.db.prepare(`
         INSERT INTO primary_window_event (
@@ -1357,6 +1362,23 @@ const decodeDelivery = (row: DeliveryRow): PrimaryWindowDelivery => {
     updatedAtMs,
   };
 };
+
+const factsExactlyEqual = (left: PrimaryWindowFacts, right: PrimaryWindowFacts): boolean =>
+  left.startAtMs === right.startAtMs
+  && left.endAtMs === right.endAtMs
+  && left.durationMs === right.durationMs
+  && left.observedAtMs === right.observedAtMs
+  && Object.is(left.usedPercent, right.usedPercent)
+  && left.quotaBucketKey === right.quotaBucketKey
+  && left.activeLimit === right.activeLimit;
+
+const eventMatchesPendingCandidate = (
+  currentFacts: PrimaryWindowFacts,
+  pending: PendingPrimaryWindowCandidate,
+): boolean => currentFacts.startAtMs === pending.startAtMs
+  && currentFacts.endAtMs === pending.endAtMs
+  && currentFacts.durationMs === pending.durationMs
+  && currentFacts.observedAtMs === pending.observedAtMs;
 
 const eventSqlValues = (event: NewPrimaryWindowEvent): SQLInputValue[] => [
   event.upstreamId,

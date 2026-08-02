@@ -296,6 +296,37 @@ describe('BindingStore cursor and transition transactions', () => {
     expect(store.commitTransition(0, transition(), [eligible.bindingId], current.observedAtMs)).toEqual({ status: 'stale' });
   });
 
+  it('rejects transition facts that do not exactly match the persisted cursor candidate', () => {
+    const mismatches: NewPrimaryWindowEvent[] = [
+      transition({ previous: { ...previous, usedPercent: 72 } }),
+      transition({
+        kind: 'manual',
+        effectivePreviousUsageEndAtMs: previous.endAtMs,
+      }),
+      transition({
+        current: {
+          ...current,
+          startAtMs: current.startAtMs + 1,
+          durationMs: current.durationMs - 1,
+        },
+      }),
+    ];
+
+    for (const mismatched of mismatches) {
+      const store = createStore();
+      seedPending(store);
+      expect(store.commitTransition(0, mismatched, [], current.observedAtMs))
+        .toEqual({ status: 'candidate-mismatch' });
+      expect(store.getCursor('up_a')).toMatchObject({
+        revision: 0,
+        anchor: previous,
+        pending: { firstSeenAtMs: current.observedAtMs },
+      });
+      expect(store.listEvents()).toEqual([]);
+      expect(store.listDeliveries()).toEqual([]);
+    }
+  });
+
   it('rolls the entire transition back if event insertion fails', () => {
     const store = createStore();
     seedPending(store);

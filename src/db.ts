@@ -850,30 +850,6 @@ export class BindingStore {
     `).run(beforeDetectedAtMs, boundedLimit).changes));
   }
 
-  list(): Binding[] {
-    return this.listBindingsSafely().bindings;
-  }
-
-  get(telegramUserId: string): Binding | null {
-    return this.getByTelegramUserId(telegramUserId);
-  }
-
-  upsert(input: { telegramUserId: string; flowayUserId: number; username: string; flowaySession: string }): Binding {
-    const current = this.getByTelegramUserId(input.telegramUserId);
-    if (current && current.flowaySession === input.flowaySession
-      && (current.flowayUserId !== input.flowayUserId || current.username !== input.username)) {
-      const refreshed = this.refreshBinding(current.bindingId, {
-        flowayUserId: input.flowayUserId,
-        username: input.username,
-      });
-      if (refreshed.status === 'updated') return refreshed.binding;
-      if (refreshed.status === 'principal-mismatch') {
-        throw new Error('Floway principal changed while refreshing a binding');
-      }
-    }
-    return this.replaceBinding(input);
-  }
-
   close(): void {
     this.db.close();
   }

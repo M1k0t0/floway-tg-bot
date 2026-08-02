@@ -74,7 +74,7 @@ describe('bot commands', () => {
       usageExportCacheTtlSeconds: 30,
       primaryWindowNotifyIntervalSeconds: 300,
     } satisfies AppConfig;
-    store.upsert({
+    store.replaceBinding({
       telegramUserId: '42',
       flowayUserId: 7,
       username: 'alice',

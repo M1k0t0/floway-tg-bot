@@ -73,7 +73,7 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
       if (handled) return;
     }
     if (!(await requirePrivate(ctx))) return;
-    await replyLong(ctx, formatStartHelp(store.get(telegramUserId(ctx))));
+    await replyLong(ctx, formatStartHelp(store.getByTelegramUserId(telegramUserId(ctx))));
   });
 
   bot.command('bind', async ctx => {
@@ -108,7 +108,7 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
 
   bot.command('unbind', async ctx => {
     if (!(await requirePrivate(ctx))) return;
-    const existing = store.get(telegramUserId(ctx));
+    const existing = store.getByTelegramUserId(telegramUserId(ctx));
     if (!existing) {
       await ctx.reply('No binding found.');
       return;
@@ -468,14 +468,14 @@ const commandArgs = (ctx: Context): string => {
 };
 
 const requireBinding = async (ctx: Context, store: BindingStore, floway: FlowayClient): Promise<BoundFlowaySession | null> => {
-  const binding = store.get(telegramUserId(ctx));
+  const binding = store.getByTelegramUserId(telegramUserId(ctx));
   if (!binding) {
     await ctx.reply('Not bound. Use /bind <username> <password> in this private chat.');
     return null;
   }
   try {
     const me = await floway.getMe(binding.flowaySession);
-    const current = store.get(binding.telegramUserId);
+    const current = store.getByTelegramUserId(binding.telegramUserId);
     if (!current || current.bindingId !== binding.bindingId) return await requireCurrentBinding(ctx, current);
     if (me.user.id !== binding.flowayUserId) {
       store.deleteBinding({ bindingId: binding.bindingId, telegramUserId: binding.telegramUserId });
@@ -487,14 +487,14 @@ const requireBinding = async (ctx: Context, store: BindingStore, floway: FlowayC
         flowayUserId: binding.flowayUserId,
         username: me.user.username,
       });
-      if (refreshed.status !== 'updated') return await requireCurrentBinding(ctx, store.get(binding.telegramUserId));
+      if (refreshed.status !== 'updated') return await requireCurrentBinding(ctx, store.getByTelegramUserId(binding.telegramUserId));
       return { binding: refreshed.binding, user: me.user };
     }
     return { binding, user: me.user };
   } catch (error) {
     if (error instanceof FlowayHttpError && error.status === 401) {
       const result = store.deleteBinding({ bindingId: binding.bindingId, telegramUserId: binding.telegramUserId });
-      if (result === 'stale') return await requireCurrentBinding(ctx, store.get(binding.telegramUserId));
+      if (result === 'stale') return await requireCurrentBinding(ctx, store.getByTelegramUserId(binding.telegramUserId));
       await ctx.reply('Floway session expired. Bind again with /bind <username> <password>.');
       return null;
     }

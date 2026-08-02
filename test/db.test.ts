@@ -189,6 +189,18 @@ describe('BindingStore schema', () => {
     }
   });
 
+  it('rejects a current-version database whose table definition changed', () => {
+    const { dbPath, secretKey } = createDatabasePath();
+    const initial = new BindingStore(dbPath, secretKey);
+    initial.close();
+    const db = new DatabaseSync(dbPath);
+    db.exec('ALTER TABLE bindings ADD COLUMN unexpected TEXT');
+    db.close();
+
+    expect(() => new BindingStore(dbPath, secretKey)).toThrow('schema does not match');
+    expect(queryOne(dbPath, 'PRAGMA user_version').user_version).toBe(CURRENT_SCHEMA_VERSION);
+  });
+
   it('reopens the current schema idempotently', () => {
     const { dbPath, secretKey } = createDatabasePath();
     const first = new BindingStore(dbPath, secretKey);

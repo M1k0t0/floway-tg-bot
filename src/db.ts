@@ -61,6 +61,21 @@ const DISCARDABLE_NOTIFICATION_COLUMNS: readonly ColumnSignature[] = [
   { name: 'sent_at', type: 'TEXT', notnull: 1, pk: 0 },
 ];
 const NEW_TABLE_NAMES = ['primary_window_cursor', 'primary_window_event', 'primary_window_delivery'] as const;
+const VERSION_ONE_SCHEMA_OBJECT_NAMES = [
+  'bindings',
+  ...NEW_TABLE_NAMES,
+  'primary_window_delivery_claim_idx',
+  'primary_window_delivery_lease_idx',
+  'primary_window_delivery_claim_token_idx',
+  'primary_window_delivery_event_fk_idx',
+  'primary_window_delivery_binding_fk_idx',
+  'primary_window_event_retention_idx',
+] as const;
+
+interface SchemaObjectRow {
+  name: string;
+  sql: string | null;
+}
 
 interface ColumnSignature {
   name: string;
@@ -854,6 +869,11 @@ export class BindingStore {
 
   private migrateVersionZero(): void {
     this.immediateTransaction(() => {
+      const lockedVersion = this.pragmaInteger('user_version');
+      if (lockedVersion === CURRENT_SCHEMA_VERSION) return;
+      if (lockedVersion !== 0) {
+        throw new Error(`Database schema version changed to unsupported version ${lockedVersion} while waiting to migrate`);
+      }
       const tableNames = this.tableNames();
       const unexpected = NEW_TABLE_NAMES.find(name => tableNames.includes(name));
       if (unexpected) throw new Error(`Version-0 database unexpectedly contains ${unexpected}`);
@@ -950,9 +970,9 @@ export class BindingStore {
       || !deliveryForeignKeys.some(row => row.table === 'primary_window_event' && row.on_delete === 'CASCADE')) {
       throw new Error('Delivery foreign keys do not match the current schema');
     }
-    const eventForeignKeys = this.db.prepare('PRAGMA foreign_key_list(primary_window_event)').all() as unknown as Array<{ table: unknown; on_delete: unknown }>;
-    if (!eventForeignKeys.some(row => row.table === 'primary_window_cursor' && row.on_delete === 'RESTRICT')) {
-      throw new Error('Event foreign key does not match the current schema');
+    const actualManifest = currentSchemaManifest(this.db);
+    if (actualManifest !== expectedCurrentSchemaManifest()) {
+      throw new Error('Database schema does not match the current definition');
     }
   }
 
@@ -1058,6 +1078,35 @@ export class BindingStore {
     }
   }
 }
+
+const currentSchemaManifest = (db: DatabaseSync): string => {
+  const placeholders = VERSION_ONE_SCHEMA_OBJECT_NAMES.map(() => '?').join(', ');
+  const rows = db.prepare(`
+    SELECT name, sql
+    FROM sqlite_schema
+    WHERE name IN (${placeholders})
+    ORDER BY name
+  `).all(...VERSION_ONE_SCHEMA_OBJECT_NAMES) as unknown as SchemaObjectRow[];
+  if (rows.length !== VERSION_ONE_SCHEMA_OBJECT_NAMES.length || rows.some(row => typeof row.sql !== 'string')) {
+    throw new Error('Database schema objects are incomplete');
+  }
+  return JSON.stringify(rows.map(row => [row.name, row.sql]));
+};
+
+let expectedSchemaManifest: string | null = null;
+
+const expectedCurrentSchemaManifest = (): string => {
+  if (expectedSchemaManifest !== null) return expectedSchemaManifest;
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec('PRAGMA foreign_keys = ON');
+    createVersionOneSchema(db);
+    expectedSchemaManifest = currentSchemaManifest(db);
+    return expectedSchemaManifest;
+  } finally {
+    db.close();
+  }
+};
 
 const createVersionOneSchema = (db: DatabaseSync): void => {
   db.exec(`

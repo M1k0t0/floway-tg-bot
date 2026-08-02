@@ -10,11 +10,8 @@ import {
   formatInfo,
   formatKeys,
   formatQuotaEstimate,
-  formatQuotaEstimateInsufficient,
-  formatQuotaEstimateInsufficientNotification,
   formatQuotaEstimateNotification,
   formatQuotaEstimateVerbose,
-  formatPrimaryWindowNotification,
   formatStartHelp,
   formatUpstreamDetail,
   formatUpstreamList,
@@ -24,6 +21,7 @@ import {
   splitMessage,
 } from './format.js';
 import { FlowayClient, FlowayHttpError } from './floway-client.js';
+import { resolvePrimaryQuotaObservation, type PrimaryQuotaResolution } from './quota-window.js';
 import {
   canShareUpstreamQuota,
   selectPrimaryQuotaWindowForUpstream,
@@ -95,7 +93,7 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
 
     try {
       const login = await floway.login(username, password);
-      store.upsert({
+      store.replaceBinding({
         telegramUserId: telegramUserId(ctx),
         flowayUserId: login.user.id,
         username: login.user.username,
@@ -111,11 +109,21 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
   bot.command('unbind', async ctx => {
     if (!(await requirePrivate(ctx))) return;
     const existing = store.get(telegramUserId(ctx));
-    if (existing) {
-      await floway.logout(existing.flowaySession).catch(() => undefined);
+    if (!existing) {
+      await ctx.reply('No binding found.');
+      return;
     }
-    const deleted = store.delete(telegramUserId(ctx));
-    await ctx.reply(deleted ? 'Binding removed.' : 'No binding found.');
+    await floway.logout(existing.flowaySession).catch(() => undefined);
+    const result = store.deleteBinding({
+      bindingId: existing.bindingId,
+      telegramUserId: existing.telegramUserId,
+    });
+    const message = result === 'deleted'
+      ? 'Binding removed.'
+      : result === 'stale'
+        ? 'Binding changed while signing out; the newer binding was kept.'
+        : 'No binding found.';
+    await ctx.reply(message);
   });
 
   bot.command('me', async ctx => {
@@ -251,11 +259,12 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
       }
       const upstream = selection.upstream;
 
-      const primaryWindow = selectPrimaryQuotaWindowForUpstream(upstream);
-      if (!primaryWindow) {
-        await replyLong(ctx, formatUsageReports(upstream, []));
+      const primaryResolution = resolvePrimaryQuotaObservation(upstream);
+      if (primaryResolution.status !== 'valid') {
+        await replyLong(ctx, formatPrimaryQuotaResolution(upstream, primaryResolution, 'usage'));
         return;
       }
+      const primaryWindow = selectPrimaryQuotaWindowForUpstream(upstream)!;
 
       const exportSnapshot = await floway.exportUsageSnapshot();
       const report: UsageWindowReport = summarizeUsageWindow(
@@ -292,14 +301,15 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
         return;
       }
       const upstream = selection.upstream;
-      const primaryWindow = selectPrimaryQuotaWindowForUpstream(upstream);
-      const primaryUsedPercent = primaryWindow?.upstreamPercent;
-      if (!primaryWindow || primaryUsedPercent === undefined) {
-        await replyLong(ctx, formatQuotaEstimate(upstream, null));
+      const primaryResolution = resolvePrimaryQuotaObservation(upstream);
+      if (primaryResolution.status !== 'valid') {
+        await replyLong(ctx, formatPrimaryQuotaResolution(upstream, primaryResolution, 'quota'));
         return;
       }
-      if (primaryUsedPercent < 1) {
-        await replyLong(ctx, formatQuotaEstimateInsufficient(upstream, primaryWindow, primaryUsedPercent));
+      const primaryWindow = selectPrimaryQuotaWindowForUpstream(upstream)!;
+      const primaryUsedPercent = primaryWindow.upstreamPercent;
+      if (primaryUsedPercent === undefined) {
+        await replyLong(ctx, formatValidWindowWithoutQuotaPercent(upstream, primaryWindow));
         return;
       }
 
@@ -356,11 +366,12 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
       }
 
       const upstream = selection.upstream;
-      const primaryWindow = selectPrimaryQuotaWindowForUpstream(upstream);
-      if (!primaryWindow) {
-        await replyLong(ctx, formatQuotaEstimate(upstream, null));
+      const primaryResolution = resolvePrimaryQuotaObservation(upstream);
+      if (primaryResolution.status !== 'valid') {
+        await replyLong(ctx, formatPrimaryQuotaResolution(upstream, primaryResolution, 'diagnostic'));
         return;
       }
+      const primaryWindow = selectPrimaryQuotaWindowForUpstream(upstream)!;
 
       const exportSnapshot = await floway.exportUsageSnapshot();
       const usageReport = summarizeUsageWindow(
@@ -369,18 +380,21 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
         primaryWindow,
         exportSnapshot,
       );
-      const primaryUsedPercent = primaryWindow.upstreamPercent;
       const quotaEstimate = formatPrimaryWindowQuotaEstimate(
         bound.binding.flowayUserId,
         upstream,
         primaryWindow,
-        primaryUsedPercent,
+        primaryWindow.upstreamPercent,
         exportSnapshot,
         users,
       );
       await replyLong(ctx, [
-        '<b>Test notification</b>',
-        formatPrimaryWindowNotification(upstream, usageReport, quotaEstimate),
+        '<b>Current primary-window preview</b>',
+        'This previews the active provider observation; it does not report a completed refresh.',
+        '',
+        formatUsageReports(upstream, [usageReport]),
+        '',
+        quotaEstimate,
       ].join('\n'));
     } catch (error) {
       await replyError(ctx, 'Failed to send primary window test notification', error);
@@ -415,7 +429,7 @@ const handleStartPayload = async (
   try {
     const username = await resolveLoginUsername(floway, credentials.account);
     const login = await floway.login(username, credentials.password);
-    store.upsert({
+    store.replaceBinding({
       telegramUserId: telegramUserId(ctx),
       flowayUserId: login.user.id,
       username: login.user.username,
@@ -461,24 +475,40 @@ const requireBinding = async (ctx: Context, store: BindingStore, floway: FlowayC
   }
   try {
     const me = await floway.getMe(binding.flowaySession);
-    let currentBinding = binding;
-    if (me.user.id !== binding.flowayUserId || me.user.username !== binding.username) {
-      currentBinding = store.upsert({
-        telegramUserId: binding.telegramUserId,
-        flowayUserId: me.user.id,
-        username: me.user.username,
-        flowaySession: binding.flowaySession,
-      });
+    const current = store.get(binding.telegramUserId);
+    if (!current || current.bindingId !== binding.bindingId) return await requireCurrentBinding(ctx, current);
+    if (me.user.id !== binding.flowayUserId) {
+      store.deleteBinding({ bindingId: binding.bindingId, telegramUserId: binding.telegramUserId });
+      await ctx.reply('Floway account identity changed. Bind again to confirm the account.');
+      return null;
     }
-    return { binding: currentBinding, user: me.user };
+    if (me.user.username !== binding.username) {
+      const refreshed = store.refreshBinding(binding.bindingId, {
+        flowayUserId: binding.flowayUserId,
+        username: me.user.username,
+      });
+      if (refreshed.status !== 'updated') return await requireCurrentBinding(ctx, store.get(binding.telegramUserId));
+      return { binding: refreshed.binding, user: me.user };
+    }
+    return { binding, user: me.user };
   } catch (error) {
     if (error instanceof FlowayHttpError && error.status === 401) {
-      store.delete(telegramUserId(ctx));
+      const result = store.deleteBinding({ bindingId: binding.bindingId, telegramUserId: binding.telegramUserId });
+      if (result === 'stale') return await requireCurrentBinding(ctx, store.get(binding.telegramUserId));
       await ctx.reply('Floway session expired. Bind again with /bind <username> <password>.');
       return null;
     }
     throw error;
   }
+};
+
+const requireCurrentBinding = async (ctx: Context, binding: Binding | null): Promise<BoundFlowaySession | null> => {
+  if (!binding) {
+    await ctx.reply('Binding changed while the request was running. Try the command again.');
+    return null;
+  }
+  await ctx.reply('Binding changed while the request was running. Try the command again.');
+  return null;
 };
 
 const replyLong = async (ctx: Context, text: string): Promise<void> => {
@@ -585,7 +615,6 @@ const formatPrimaryWindowQuotaEstimate = (
   users: Awaited<ReturnType<FlowayClient['listUsers']>>,
 ): string => {
   if (primaryUsedPercent === undefined) return formatQuotaEstimateNotification(null);
-  if (primaryUsedPercent < 1) return formatQuotaEstimateInsufficientNotification(primaryUsedPercent);
 
   const nonAdminUserCount = users.filter(user => canShareUpstreamQuota(user, upstream.id)).length;
   const report = summarizeUsageQuotaEstimate(
@@ -598,5 +627,30 @@ const formatPrimaryWindowQuotaEstimate = (
   );
   return formatQuotaEstimateNotification(report);
 };
+
+const formatPrimaryQuotaResolution = (
+  upstream: UpstreamRecord,
+  resolution: Exclude<PrimaryQuotaResolution, { status: 'valid' }>,
+  surface: 'usage' | 'quota' | 'diagnostic',
+): string => {
+  const subject = `${htmlSafeText(upstream.name)} <code>${htmlSafeText(upstream.id)}</code>`;
+  const detail = resolution.status === 'unsupported'
+    ? 'This upstream does not expose Codex primary quota.'
+    : resolution.status === 'malformed'
+      ? 'Floway returned an invalid primary quota observation. The last known notifier state was kept.'
+      : resolution.status === 'ambiguous'
+        ? 'Floway returned conflicting primary quota observations. The last known notifier state was kept.'
+        : 'No primary quota observation is currently available.';
+  return `<b>${surface === 'usage' ? 'Usage unavailable' : surface === 'quota' ? 'Quota estimate unavailable' : 'Primary-window preview unavailable'}</b>\n${subject}\n${detail}`;
+};
+
+const formatValidWindowWithoutQuotaPercent = (
+  upstream: UpstreamRecord,
+  window: NonNullable<ReturnType<typeof selectPrimaryQuotaWindowForUpstream>>,
+): string => [
+  '<b>Quota estimate unavailable</b>',
+  `${htmlSafeText(upstream.name)} <code>${htmlSafeText(upstream.id)}</code>`,
+  `Floway reported the primary window <code>${htmlSafeText(window.startAt)}</code> -&gt; <code>${htmlSafeText(window.endAt)}</code>, but did not report its used percentage.`,
+].join('\n');
 
 const htmlSafeText = (value: string): string => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

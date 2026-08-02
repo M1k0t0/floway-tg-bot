@@ -232,6 +232,22 @@ describe('PrimaryWindowNotifier', () => {
     expect(firstStore.listDeliveries()).toEqual([expect.objectContaining({ status: 'sent' })]);
   });
 
+  it('drains an existing delivery even when provider observation loading fails', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T05:03:00.000Z');
+    const store = createStore();
+    const binding = bindAlice(store);
+    seedPendingDelivery(store, binding.bindingId);
+    const runtime = createRuntime(store, async () => {
+      throw new Error('upstreams unavailable');
+    });
+
+    await runtime.notifier.pollOnce();
+
+    expect(runtime.sendMessage).toHaveBeenCalledTimes(1);
+    expect(store.listDeliveries()).toEqual([expect.objectContaining({ status: 'sent' })]);
+  });
+
   it('sends the reset alert with an unavailable section when enrichment fails', async () => {
     vi.useFakeTimers();
     vi.setSystemTime('2026-06-01T05:03:00.000Z');

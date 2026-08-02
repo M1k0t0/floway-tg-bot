@@ -51,8 +51,11 @@ floway-tg-bot/
 │   ├── bot.ts                      # Telegram command registration and command handlers
 │   ├── config.ts                   # environment parsing and defaults
 │   ├── floway-client.ts            # Floway HTTP client and response validation
-│   ├── db.ts                       # SQLite binding, key, primary-window state stores
-│   ├── usage.ts                    # usage aggregation, windows, quota estimate calculations
+│   ├── db.ts                       # SQLite runtime store and binding/outbox operations
+│   ├── db-constraints.ts           # constraints shared by runtime storage and schema DDL
+│   ├── db-migrations/              # ordered startup migrations and canonical schema verification
+│   ├── quota-window.ts             # normalized quota observations and window transition classification
+│   ├── usage.ts                    # usage aggregation and quota estimate calculations
 │   ├── format.ts                   # Telegram HTML formatting helpers
 │   ├── primary-window-notifier.ts # upstream primary-window polling and notification logic
 │   ├── deeplink.ts                 # Telegram /start bind payload helpers
@@ -87,21 +90,34 @@ window advances.
 
 Important invariants:
 
-- Compare window start/end boundaries with a five-hour routing debounce;
-  this tolerance is independent of the primary window's duration. Floway
-  timestamps can drift by seconds, milliseconds, or a few hours. Preserve exact
-  `startAt`/`endAt` values for display, storage, and usage summarization.
+- Normalize provider timestamps to exact instants. Classify observations against an
+  immutable anchor with a duration-relative tolerance capped at five hours; tolerated
+  drift updates observation metadata but never moves the anchor.
+- Create refresh events only after two matching provider observations. Missing,
+  malformed, stale, or ambiguous quota data must not synthesize elapsed windows or
+  erase the last valid cursor.
 - Treat a new window that starts inside the stored window and extends past it
   as an upstream early/manual refresh. Report the stored window truncated at
   the new start and include an explicit notification note.
-- Do not let a notification recorded before a window actually ended suppress a
-  later real reset notification.
-- If Floway quota state is temporarily missing or stale, use local stored
-  state to detect elapsed windows, but do not invent provider-specific logic
-  outside the existing Floway API shape.
+- Commit cursor advancement, immutable event data, and eligible delivery outbox
+  rows in one SQLite transaction. Telegram delivery is at-least-once and claimed
+  with expiring leases; a crash after Telegram accepts a message can duplicate it.
 - Quota estimates in notifications are estimates only; they derive from
-  upstream-level usage and raw token totals, and are not exact per-user quota
+  upstream-level hourly usage and raw token totals, and are not exact per-user quota
   accounting.
+
+## Database Migrations
+
+`src/db-migrations/` contains contiguous numbered migrations. `BindingStore`
+automatically compares `PRAGMA user_version` with the compiled registry during
+startup and applies every missing migration in order before the bot or notifier
+starts. Each migration and its version update share one `BEGIN IMMEDIATE`
+transaction; failures roll back and abort startup.
+
+Do not add or require a manual migration command. Before deploying a schema
+change, back up the SQLite database, build the application, and restart it
+normally. Add a new numbered migration rather than editing an already-released
+migration.
 
 ## Data And Secrets
 
@@ -141,6 +157,7 @@ For targeted work, prefer focused commands first, then broaden before
 completion when the change has shared behavior:
 
 ```bash
+./node_modules/.bin/vitest run test/db-migrations.test.ts test/db.test.ts --maxWorkers=1 --no-file-parallelism
 ./node_modules/.bin/vitest run test/primary-window-notifier.test.ts --maxWorkers=1 --no-file-parallelism
 ./node_modules/.bin/vitest run test/format.test.ts --maxWorkers=1 --no-file-parallelism
 ./node_modules/.bin/tsc --noEmit -p tsconfig.json --pretty false

@@ -55,6 +55,11 @@ interface PrimaryWindowNotifierOptions {
   intervalSeconds: number;
 }
 
+interface RefreshedBindings {
+  current: RefreshedBinding[];
+  retryableBindingIds: number[];
+}
+
 interface RefreshedBinding {
   binding: Binding;
   user: AuthMeResponse['user'];
@@ -140,9 +145,12 @@ export class PrimaryWindowNotifier {
       }
 
       const eligibleBindingIds = upstream.enabled
-        ? refreshedBindings
-          .filter(bound => canUseUpstream(bound.user, upstream.id))
-          .map(bound => bound.binding.bindingId)
+        ? [
+          ...refreshedBindings.current
+            .filter(bound => canUseUpstream(bound.user, upstream.id))
+            .map(bound => bound.binding.bindingId),
+          ...refreshedBindings.retryableBindingIds,
+        ]
         : [];
       try {
         this.applyObservation(upstream, resolution.observation, eligibleBindingIds, nowMs);
@@ -158,19 +166,20 @@ export class PrimaryWindowNotifier {
     }
   }
 
-  private async refreshBindings(): Promise<RefreshedBinding[]> {
+  private async refreshBindings(): Promise<RefreshedBindings> {
     const listed = this.options.store.listBindingsSafely();
     for (const error of listed.errors) console.error(`Skipped invalid binding row ${error.bindingId ?? 'unknown'}: ${error.message}`);
     if (listed.probableWrongSecret) {
       console.error('All stored bindings failed authentication; BOT_SECRET_KEY may not match this database');
     }
 
-    const refreshed: RefreshedBinding[] = [];
+    const current: RefreshedBinding[] = [];
+    const retryableBindingIds: number[] = [];
     for (const binding of listed.bindings) {
       try {
         const me = await this.options.floway.getMe(binding.flowaySession);
-        const current = this.options.store.getByBindingId(binding.bindingId);
-        if (!current) continue;
+        const stored = this.options.store.getByBindingId(binding.bindingId);
+        if (!stored) continue;
         if (me.user.id !== binding.flowayUserId) {
           this.options.store.deleteBinding({ bindingId: binding.bindingId, telegramUserId: binding.telegramUserId });
           continue;
@@ -181,19 +190,20 @@ export class PrimaryWindowNotifier {
             username: me.user.username,
           });
           if (result.status !== 'updated') continue;
-          refreshed.push({ binding: result.binding, user: me.user });
+          current.push({ binding: result.binding, user: me.user });
         } else {
-          refreshed.push({ binding, user: me.user });
+          current.push({ binding, user: me.user });
         }
       } catch (error) {
         if (error instanceof FlowayHttpError && error.status === 401) {
           this.options.store.deleteBinding({ bindingId: binding.bindingId, telegramUserId: binding.telegramUserId });
           continue;
         }
+        retryableBindingIds.push(binding.bindingId);
         console.error(`Failed to refresh Floway binding ${binding.bindingId}:`, error);
       }
     }
-    return refreshed;
+    return { current, retryableBindingIds };
   }
 
   private applyObservation(
@@ -242,7 +252,12 @@ export class PrimaryWindowNotifier {
     if (observation.startMs > nowMs) return;
 
     const confirmedPending: PendingPrimaryWindowCandidate = {
-      ...cursor.pending,
+      kind: cursor.pending.kind,
+      startAtMs: observation.startMs,
+      endAtMs: observation.endMs,
+      durationMs: observation.durationMs,
+      observedAtMs: observation.observedAtMs,
+      firstSeenAtMs: cursor.pending.firstSeenAtMs,
       observationCount: cursor.pending.observationCount + 1,
     };
     const replaced = this.options.store.replacePendingCandidate(upstream.id, cursor.revision, confirmedPending);
@@ -257,10 +272,10 @@ export class PrimaryWindowNotifier {
       kind: cursor.pending.kind,
       previous: cursor.latest,
       current: {
-        startAtMs: cursor.pending.startAtMs,
-        endAtMs: cursor.pending.endAtMs,
-        durationMs: cursor.pending.durationMs,
-        observedAtMs: cursor.pending.observedAtMs,
+        startAtMs: confirmedPending.startAtMs,
+        endAtMs: confirmedPending.endAtMs,
+        durationMs: confirmedPending.durationMs,
+        observedAtMs: confirmedPending.observedAtMs,
         usedPercent: observation.usedPercent,
         quotaBucketKey: observation.bucketKey,
         activeLimit: observation.activeLimit,

@@ -368,6 +368,7 @@ const parseRfc3339 = (value: unknown): { iso: string; ms: number } | null => {
     || hour > 23
     || minute > 59
     || second > 59
+    || fraction.length > 3
     || offsetHour > 23
     || offsetMinute > 59
   ) {

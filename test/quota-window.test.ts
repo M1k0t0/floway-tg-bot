@@ -130,6 +130,17 @@ describe('resolveQuotaWindowObservation', () => {
     });
   });
 
+  it('rejects timestamp precision that cannot be represented exactly', () => {
+    expect(resolveQuotaWindowObservation(upstream({ plus: snapshot(
+      '2026-07-01T01:00:00.0001Z',
+      '2026-07-01T02:00:00Z',
+    ) }))).toEqual({ status: 'malformed' });
+    expect(resolveQuotaWindowObservation(upstream({ plus: snapshot(
+      '2026-07-01T01:00:00Z',
+      '2026-07-01T02:00:00.0001Z',
+    ) }))).toEqual({ status: 'malformed' });
+  });
+
   it('accepts a secondary-only snapshot', () => {
     const quota: CodexQuotaSnapshot = {
       observed_at: '2026-07-01T01:00:00Z',

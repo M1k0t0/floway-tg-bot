@@ -57,10 +57,6 @@ when the selected Codex quota window advances. Notifications are based only on
 confirmed Floway observations; usage attribution is an estimate from hourly
 export data. Tune the poll interval with `QUOTA_WINDOW_NOTIFY_INTERVAL_SECONDS`.
 
-When upgrading from a deployment that used
-`PRIMARY_WINDOW_NOTIFY_INTERVAL_SECONDS`, rename that environment variable to
-`QUOTA_WINDOW_NOTIFY_INTERVAL_SECONDS` before restarting.
-
 ## Database Upgrades
 
 The Node process applies SQLite migrations automatically during startup, before

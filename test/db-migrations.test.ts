@@ -32,17 +32,17 @@ describe('automatic database migrations', () => {
     expect(String(pragmaValue(db, 'journal_mode')).toLowerCase()).toBe('wal');
     expect(tableFlags(db)).toMatchObject({
       bindings: 1,
-      primary_window_cursor: 1,
-      primary_window_event: 1,
-      primary_window_delivery: 1,
+      quota_window_cursor: 1,
+      quota_window_event: 1,
+      quota_window_delivery: 1,
     });
     expect(indexNames(db)).toEqual(expect.arrayContaining([
-      'primary_window_delivery_claim_idx',
-      'primary_window_delivery_lease_idx',
-      'primary_window_delivery_claim_token_idx',
-      'primary_window_delivery_event_fk_idx',
-      'primary_window_delivery_binding_fk_idx',
-      'primary_window_event_retention_idx',
+      'quota_window_delivery_claim_idx',
+      'quota_window_delivery_lease_idx',
+      'quota_window_delivery_claim_token_idx',
+      'quota_window_delivery_event_fk_idx',
+      'quota_window_delivery_binding_fk_idx',
+      'quota_window_event_retention_idx',
     ]));
     db.close();
     expect(store.listBindingsSafely()).toEqual({ bindings: [], errors: [], probableWrongSecret: false });
@@ -77,9 +77,9 @@ describe('automatic database migrations', () => {
     expect(raw.bound_at_ms).toBeGreaterThanOrEqual(before);
     expect(raw.bound_at_ms).toBeLessThanOrEqual(after);
     expect(queryOne(dbPath, 'SELECT value FROM archived_notifier_cache').value).toBe('keep');
-    expect(queryOne(dbPath, 'SELECT count(*) AS count FROM primary_window_cursor').count).toBe(0);
-    expect(queryOne(dbPath, 'SELECT count(*) AS count FROM primary_window_event').count).toBe(0);
-    expect(queryOne(dbPath, 'SELECT count(*) AS count FROM primary_window_delivery').count).toBe(0);
+    expect(queryOne(dbPath, 'SELECT count(*) AS count FROM quota_window_cursor').count).toBe(0);
+    expect(queryOne(dbPath, 'SELECT count(*) AS count FROM quota_window_event').count).toBe(0);
+    expect(queryOne(dbPath, 'SELECT count(*) AS count FROM quota_window_delivery').count).toBe(0);
   });
 
   it('reopens the current version without rerunning migrations', () => {
@@ -262,7 +262,7 @@ const tableNames = (dbPath: string): string[] => {
 
 const tableFlags = (db: DatabaseSync): Record<string, number> => Object.fromEntries(
   (db.prepare('PRAGMA table_list').all() as unknown as Array<{ name: string; strict: number }>)
-    .filter(row => ['bindings', 'primary_window_cursor', 'primary_window_event', 'primary_window_delivery'].includes(row.name))
+    .filter(row => ['bindings', 'quota_window_cursor', 'quota_window_event', 'quota_window_delivery'].includes(row.name))
     .map(row => [row.name, row.strict]),
 );
 

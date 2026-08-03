@@ -229,7 +229,7 @@ describe('BindingStore cursor and transition transactions', () => {
     const { dbPath, secretKey } = createDatabasePath();
     const store = track(new BindingStore(dbPath, secretKey));
     store.seedCursor('up_a', previous);
-    rawExec(dbPath, 'PRAGMA ignore_check_constraints = ON; UPDATE primary_window_cursor SET anchor_duration_ms = 1; PRAGMA ignore_check_constraints = OFF');
+    rawExec(dbPath, 'PRAGMA ignore_check_constraints = ON; UPDATE quota_window_cursor SET anchor_duration_ms = 1; PRAGMA ignore_check_constraints = OFF');
     expect(() => store.getCursor('up_a')).toThrow(DatabaseRowError);
     expect(store.resetCursor('up_a')).toBe(true);
     expect(store.getCursor('up_a')).toBeNull();
@@ -308,10 +308,10 @@ describe('BindingStore delivery outbox', () => {
     const binding = store.replaceBinding({ telegramUserId: '100', flowayUserId: 1, username: 'alice', flowaySession: 'a' }, OBSERVED);
     seedPending(store);
     store.commitTransition(0, transition(), [binding.bindingId], current.observedAtMs);
-    rawExec(dbPath, "PRAGMA ignore_check_constraints = ON; UPDATE primary_window_delivery SET attempts = -1; PRAGMA ignore_check_constraints = OFF");
+    rawExec(dbPath, "PRAGMA ignore_check_constraints = ON; UPDATE quota_window_delivery SET attempts = -1; PRAGMA ignore_check_constraints = OFF");
 
     expect(store.claimDueDelivery({ nowMs: current.observedAtMs, leaseDurationMs: 1_000 })).toBeNull();
-    expect(queryOne(dbPath, 'SELECT status, last_error FROM primary_window_delivery')).toEqual({
+    expect(queryOne(dbPath, 'SELECT status, last_error FROM quota_window_delivery')).toEqual({
       status: 'dead',
       last_error: 'Malformed delivery row',
     });

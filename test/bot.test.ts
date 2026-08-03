@@ -40,7 +40,7 @@ const upstream = (id: string): UpstreamRecord => ({
 });
 
 describe('bot commands', () => {
-  it('keeps the primary window test command hidden from the Telegram command list', () => {
+  it('keeps the quota window test command hidden from the Telegram command list', () => {
     expect(BOT_COMMANDS.map(command => command.command)).not.toContain(TEST_QUOTA_WINDOW_COMMAND);
   });
 
@@ -116,6 +116,61 @@ describe('bot commands', () => {
       callApi.mockRestore();
       store.close();
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('uses the latest-reset quota slot for the usage command', async () => {
+    const fixture = createCommandFixture();
+    fixture.store.replaceBinding({
+      telegramUserId: '42',
+      flowayUserId: 7,
+      username: 'alice',
+      flowaySession: 'session',
+    });
+    const selected = {
+      ...upstream('up_a'),
+      codex_quota: {
+        plus: {
+          observed_at: '2026-07-01T01:00:00.000Z',
+          active_limit: 'premium',
+          primary_window_minutes: 300,
+          primary_reset_after_at: '2026-07-01T05:00:00.000Z',
+          primary_used_percent: 15,
+          secondary_window_minutes: 10_080,
+          secondary_reset_after_at: '2026-07-08T00:00:00.000Z',
+          secondary_used_percent: 75,
+        },
+      },
+    } satisfies UpstreamRecord;
+    const floway = {
+      getMe: vi.fn().mockResolvedValue({
+        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
+        viaApiKey: false,
+        apiKey: null,
+      }),
+      listUpstreams: vi.fn().mockResolvedValue([selected]),
+      exportUsageSnapshot: vi.fn().mockResolvedValue({
+        exportedAt: '2026-07-01T01:00:00.000Z',
+        users: [{ id: 7, username: 'alice', deletedAt: null }],
+        apiKeys: [],
+        usage: [],
+      }),
+    } as unknown as FlowayClient;
+    const bot = configuredBot(fixture, floway);
+    const callApi = vi.spyOn(Telegram.prototype, 'callApi').mockResolvedValue({} as never);
+
+    try {
+      await bot.handleUpdate(commandUpdate('/usage up_a', 4));
+
+      const text = sentTexts(callApi).join('\n');
+      expect(text).toContain('<b>Quota window — premium</b>');
+      expect(text).toContain('<code>2026-07-01T00:00:00.000Z</code>');
+      expect(text).toContain('<code>2026-07-08T00:00:00.000Z</code>');
+      expect(text).toContain('<b>Floway upstream used</b>: <b>75.0%</b>');
+      expect(text).not.toContain('15.0%');
+    } finally {
+      callApi.mockRestore();
+      fixture.close();
     }
   });
 

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   classifyQuotaWindowTransition,
   matchesQuotaWindowCandidate,
+  premiumQuotaSnapshots,
   quotaWindowToleranceMs,
   resolveQuotaWindowObservation,
   type QuotaWindowObservation,
@@ -75,6 +76,22 @@ const observationAt = (
   ...overrides,
 });
 
+describe('premiumQuotaSnapshots', () => {
+  it('keeps premium active-limit selection independent from window slots', () => {
+    const fallback = snapshot('2026-07-01T03:00:00Z', '2026-07-01T04:00:00Z');
+    delete fallback.active_limit;
+    const explicit = snapshot('2026-07-01T01:00:00Z', '2026-07-01T02:00:00Z');
+    const record = upstream({ premium: fallback, plus: explicit, enterprise: {
+      ...explicit,
+      active_limit: 'enterprise',
+      secondary_window_minutes: 10_080,
+      secondary_reset_after_at: '2026-07-08T00:00:00Z',
+    } });
+
+    expect(premiumQuotaSnapshots(record)).toEqual([{ bucketKey: 'plus', snapshot: explicit }]);
+  });
+});
+
 describe('resolveQuotaWindowObservation', () => {
   it('returns unsupported and missing without manufacturing observations', () => {
     expect(resolveQuotaWindowObservation(upstream(null, 'copilot'))).toEqual({ status: 'unsupported' });
@@ -87,16 +104,15 @@ describe('resolveQuotaWindowObservation', () => {
     ) }))).toEqual({ status: 'missing' });
   });
 
-  it('normalizes explicit-offset timestamps and preserves observed time', () => {
+  it('normalizes timestamps and accepts a primary-only snapshot', () => {
     const quota = snapshot(
       '2026-07-01T03:04:05.125+02:00',
       '2026-07-01T04:00:00+02:00',
       { active_limit: ' Premium ', primary_window_minutes: 90 },
     );
     delete quota.primary_used_percent;
-    const result = resolveQuotaWindowObservation(upstream({ plus: quota }));
 
-    expect(result).toEqual({
+    expect(resolveQuotaWindowObservation(upstream({ plus: quota }))).toEqual({
       status: 'valid',
       observation: {
         upstreamId: 'upstream-a',
@@ -114,6 +130,125 @@ describe('resolveQuotaWindowObservation', () => {
     });
   });
 
+  it('accepts a secondary-only snapshot', () => {
+    const quota: CodexQuotaSnapshot = {
+      observed_at: '2026-07-01T01:00:00Z',
+      active_limit: 'premium',
+      secondary_window_minutes: 10_080,
+      secondary_reset_after_at: '2026-07-08T00:00:00Z',
+      secondary_used_percent: 70,
+    };
+
+    expect(resolveQuotaWindowObservation(upstream({ plus: quota }))).toMatchObject({
+      status: 'valid',
+      observation: {
+        startAt: '2026-07-01T00:00:00.000Z',
+        endAt: '2026-07-08T00:00:00.000Z',
+        durationMs: 10_080 * 60_000,
+        usedPercent: 70,
+      },
+    });
+  });
+
+  it('chooses the slot whose reset is latest when primary and secondary labels swap', () => {
+    const fiveHour = {
+      windowMinutes: 300,
+      resetAt: '2026-07-01T05:00:00Z',
+      usedPercent: 15,
+    };
+    const sevenDay = {
+      windowMinutes: 10_080,
+      resetAt: '2026-07-08T00:00:00Z',
+      usedPercent: 75,
+    };
+    const primaryFiveHour = snapshot('2026-07-01T01:00:00Z', fiveHour.resetAt, {
+      primary_window_minutes: fiveHour.windowMinutes,
+      primary_used_percent: fiveHour.usedPercent,
+      secondary_window_minutes: sevenDay.windowMinutes,
+      secondary_reset_after_at: sevenDay.resetAt,
+      secondary_used_percent: sevenDay.usedPercent,
+    });
+    const primarySevenDay = snapshot('2026-07-01T01:01:00Z', sevenDay.resetAt, {
+      primary_window_minutes: sevenDay.windowMinutes,
+      primary_used_percent: sevenDay.usedPercent,
+      secondary_window_minutes: fiveHour.windowMinutes,
+      secondary_reset_after_at: fiveHour.resetAt,
+      secondary_used_percent: fiveHour.usedPercent,
+    });
+
+    for (const quota of [primaryFiveHour, primarySevenDay]) {
+      expect(resolveQuotaWindowObservation(upstream({ plus: quota }))).toMatchObject({
+        status: 'valid',
+        observation: {
+          endAt: '2026-07-08T00:00:00.000Z',
+          durationMs: 10_080 * 60_000,
+          usedPercent: 75,
+        },
+      });
+    }
+  });
+
+  it('ranks reset before duration and duration only breaks equal-reset ties', () => {
+    const laterShorter = snapshot('2026-07-01T01:00:00Z', '2026-07-08T00:00:00Z', {
+      primary_window_minutes: 10_080,
+      primary_used_percent: 70,
+      secondary_window_minutes: 300,
+      secondary_reset_after_at: '2026-07-08T01:00:00Z',
+      secondary_used_percent: 20,
+    });
+    expect(resolveQuotaWindowObservation(upstream({ plus: laterShorter }))).toMatchObject({
+      status: 'valid',
+      observation: { endAt: '2026-07-08T01:00:00.000Z', durationMs: 300 * 60_000, usedPercent: 20 },
+    });
+
+    const equalReset = snapshot('2026-07-01T01:00:00Z', '2026-07-08T00:00:00Z', {
+      primary_window_minutes: 300,
+      primary_used_percent: 20,
+      secondary_window_minutes: 10_080,
+      secondary_reset_after_at: '2026-07-08T00:00:00Z',
+      secondary_used_percent: 70,
+    });
+    expect(resolveQuotaWindowObservation(upstream({ plus: equalReset }))).toMatchObject({
+      status: 'valid',
+      observation: { durationMs: 10_080 * 60_000, usedPercent: 70 },
+    });
+  });
+
+  it('coalesces identical equal-rank slots and rejects conflicting facts', () => {
+    const identical = snapshot('2026-07-01T01:00:00Z', '2026-07-08T00:00:00Z', {
+      primary_window_minutes: 10_080,
+      primary_used_percent: 70,
+      secondary_window_minutes: 10_080,
+      secondary_reset_after_at: '2026-07-08T00:00:00Z',
+      secondary_used_percent: 70,
+    });
+    expect(resolveQuotaWindowObservation(upstream({ plus: identical }))).toMatchObject({ status: 'valid' });
+
+    expect(resolveQuotaWindowObservation(upstream({ plus: {
+      ...identical,
+      secondary_used_percent: 71,
+    } }))).toEqual({ status: 'ambiguous' });
+  });
+
+  it('fails closed when a sibling slot is partial or malformed', () => {
+    const invalidSiblings: Partial<CodexQuotaSnapshot>[] = [
+      { secondary_window_minutes: 10_080 },
+      { secondary_reset_after_at: '2026-07-08T00:00:00Z' },
+      { secondary_used_percent: 70 },
+      { secondary_window_minutes: 10_080, secondary_reset_after_at: 'bad' },
+      { secondary_window_minutes: 0, secondary_reset_after_at: '2026-07-08T00:00:00Z' },
+      { secondary_window_minutes: 10_080, secondary_reset_after_at: '2026-07-08T00:00:00Z', secondary_used_percent: 101 },
+    ];
+
+    for (const sibling of invalidSiblings) {
+      expect(resolveQuotaWindowObservation(upstream({ plus: snapshot(
+        '2026-07-01T01:00:00Z',
+        '2026-07-01T02:00:00Z',
+        sibling,
+      ) }))).toEqual({ status: 'malformed' });
+    }
+  });
+
   it('uses the premium key only when active_limit is absent', () => {
     const fallback = snapshot('2026-07-01T01:00:00Z', '2026-07-01T02:00:00Z');
     delete fallback.active_limit;
@@ -128,7 +263,10 @@ describe('resolveQuotaWindowObservation', () => {
   });
 
   it('gives explicit premium candidates precedence over fallback candidates', () => {
-    const fallback = snapshot('2026-07-01T03:00:00Z', '2026-07-01T04:00:00Z');
+    const fallback = snapshot('2026-07-01T03:00:00Z', '2026-07-08T00:00:00Z', {
+      secondary_window_minutes: 300,
+      secondary_reset_after_at: '2026-07-09T00:00:00Z',
+    });
     delete fallback.active_limit;
     const result = resolveQuotaWindowObservation(upstream({
       premium: fallback,
@@ -141,7 +279,7 @@ describe('resolveQuotaWindowObservation', () => {
     });
   });
 
-  it('validates runtime bucket values without throwing', () => {
+  it('validates runtime values without throwing', () => {
     const malformed: unknown[] = [
       { premium: null },
       { premium: [] },
@@ -151,7 +289,7 @@ describe('resolveQuotaWindowObservation', () => {
       { premium: snapshot('2026-07-01T01:00:00Z', '2026-07-01T02:00:00') },
       { premium: snapshot('2026-07-01T01:00:00Z', '2026-07-01T02:00:00Z', { primary_window_minutes: 0 }) },
       { premium: snapshot('2026-07-01T01:00:00Z', '2026-07-01T02:00:00Z', { primary_window_minutes: 1.5 }) },
-      { premium: snapshot('2026-07-01T01:00:00Z', '2026-07-01T02:00:00Z', { primary_window_minutes: 44641 }) },
+      { premium: snapshot('2026-07-01T01:00:00Z', '2026-07-01T02:00:00Z', { primary_window_minutes: 44_641 }) },
       { premium: snapshot('2026-07-01T01:00:00Z', '2026-07-01T02:00:00Z', { primary_used_percent: Number.NaN }) },
       { premium: snapshot('2026-07-01T01:00:00Z', '2026-07-01T02:00:00Z', { primary_used_percent: 101 }) },
     ];
@@ -162,7 +300,7 @@ describe('resolveQuotaWindowObservation', () => {
     }
   });
 
-  it('selects the newest valid explicit candidate and lets it supersede older malformed data', () => {
+  it('lets newer valid snapshots supersede older malformed data', () => {
     const result = resolveQuotaWindowObservation(upstream({
       broken: {
         observed_at: '2026-07-01T01:00:00Z',
@@ -185,7 +323,7 @@ describe('resolveQuotaWindowObservation', () => {
     }
   });
 
-  it('coalesces identical newest candidates and rejects equal-time conflicts', () => {
+  it('coalesces identical newest fallback candidates and rejects bucket conflicts', () => {
     const common = snapshot('2026-07-01T02:00:00Z', '2026-07-01T03:00:00Z');
     expect(resolveQuotaWindowObservation(upstream({ a: common, aCopy: { ...common } }))).toEqual({
       status: 'ambiguous',
@@ -198,15 +336,10 @@ describe('resolveQuotaWindowObservation', () => {
     expect(resolveQuotaWindowObservation(upstream({ premium: fallbackA, ' Premium ': fallbackB }))).toMatchObject({
       status: 'valid',
     });
-
-    expect(resolveQuotaWindowObservation(upstream({
-      a: common,
-      b: { ...common, primary_used_percent: 26 },
-    }))).toEqual({ status: 'ambiguous' });
   });
 });
 
-describe('primary quota transitions', () => {
+describe('quota window transitions', () => {
   it('uses adaptive tolerance bounded from one second to five hours', () => {
     expect(quotaWindowToleranceMs(validObservation({ durationMs: 10_000 }), validObservation())).toBe(1_000);
     expect(quotaWindowToleranceMs(validObservation({ durationMs: 60 * 60_000 }), validObservation())).toBe(108_000);
@@ -245,6 +378,37 @@ describe('primary quota transitions', () => {
       '2026-07-01T01:00:00Z',
       '2026-07-01T00:31:00Z',
     ))).toBe('ambiguous');
+  });
+
+  it('treats provider slot relabeling as the same lifecycle identity', () => {
+    const first = resolveQuotaWindowObservation(upstream({ plus: snapshot(
+      '2026-07-01T01:00:00Z',
+      '2026-07-08T00:00:00Z',
+      {
+        primary_window_minutes: 10_080,
+        primary_used_percent: 70,
+        secondary_window_minutes: 300,
+        secondary_reset_after_at: '2026-07-01T05:00:00Z',
+        secondary_used_percent: 10,
+      },
+    ) }));
+    const relabeled = resolveQuotaWindowObservation(upstream({ plus: snapshot(
+      '2026-07-01T01:01:00Z',
+      '2026-07-01T05:00:00Z',
+      {
+        primary_window_minutes: 300,
+        primary_used_percent: 10,
+        secondary_window_minutes: 10_080,
+        secondary_reset_after_at: '2026-07-08T00:00:00Z',
+        secondary_used_percent: 70,
+      },
+    ) }));
+    expect(first.status).toBe('valid');
+    expect(relabeled.status).toBe('valid');
+    if (first.status !== 'valid' || relabeled.status !== 'valid') return;
+
+    expect(classifyQuotaWindowTransition(first.observation, relabeled.observation)).toBe('same');
+    expect(matchesQuotaWindowCandidate(first.observation, relabeled.observation)).toBe(true);
   });
 
   it('rejects conflicting equal-observedAt transitions and pending-candidate matches', () => {

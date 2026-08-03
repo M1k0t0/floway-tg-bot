@@ -24,7 +24,7 @@ import { FlowayClient, FlowayHttpError } from './floway-client.js';
 import { resolveQuotaWindowObservation, type QuotaWindowResolution } from './quota-window.js';
 import {
   canShareUpstreamQuota,
-  selectQuotaWindowForUpstream,
+  quotaObservationToUsageWindow,
   summarizeUsageLeaderboard,
   summarizeUsageQuotaEstimate,
   summarizeUsageWindow,
@@ -259,12 +259,12 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
       }
       const upstream = selection.upstream;
 
-      const primaryResolution = resolveQuotaWindowObservation(upstream);
-      if (primaryResolution.status !== 'valid') {
-        await replyLong(ctx, formatQuotaWindowResolution(upstream, primaryResolution, 'usage'));
+      const resolution = resolveQuotaWindowObservation(upstream);
+      if (resolution.status !== 'valid') {
+        await replyLong(ctx, formatQuotaWindowResolution(upstream, resolution, 'usage'));
         return;
       }
-      const quotaWindow = selectQuotaWindowForUpstream(upstream)!;
+      const quotaWindow = quotaObservationToUsageWindow(resolution.observation);
 
       const exportSnapshot = await floway.exportUsageSnapshot();
       const report: UsageWindowReport = summarizeUsageWindow(
@@ -301,14 +301,14 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
         return;
       }
       const upstream = selection.upstream;
-      const primaryResolution = resolveQuotaWindowObservation(upstream);
-      if (primaryResolution.status !== 'valid') {
-        await replyLong(ctx, formatQuotaWindowResolution(upstream, primaryResolution, 'quota'));
+      const resolution = resolveQuotaWindowObservation(upstream);
+      if (resolution.status !== 'valid') {
+        await replyLong(ctx, formatQuotaWindowResolution(upstream, resolution, 'quota'));
         return;
       }
-      const quotaWindow = selectQuotaWindowForUpstream(upstream)!;
-      const primaryUsedPercent = quotaWindow.upstreamPercent;
-      if (primaryUsedPercent === undefined) {
+      const quotaWindow = quotaObservationToUsageWindow(resolution.observation);
+      const usedPercent = quotaWindow.upstreamPercent;
+      if (usedPercent === undefined) {
         await replyLong(ctx, formatValidWindowWithoutQuotaPercent(upstream, quotaWindow));
         return;
       }
@@ -319,7 +319,7 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
         bound.binding.flowayUserId,
         upstream.id,
         quotaWindow,
-        primaryUsedPercent,
+        usedPercent,
         exportSnapshot,
         nonAdminUserCount,
       );
@@ -366,12 +366,12 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
       }
 
       const upstream = selection.upstream;
-      const primaryResolution = resolveQuotaWindowObservation(upstream);
-      if (primaryResolution.status !== 'valid') {
-        await replyLong(ctx, formatQuotaWindowResolution(upstream, primaryResolution, 'diagnostic'));
+      const resolution = resolveQuotaWindowObservation(upstream);
+      if (resolution.status !== 'valid') {
+        await replyLong(ctx, formatQuotaWindowResolution(upstream, resolution, 'diagnostic'));
         return;
       }
-      const quotaWindow = selectQuotaWindowForUpstream(upstream)!;
+      const quotaWindow = quotaObservationToUsageWindow(resolution.observation);
 
       const exportSnapshot = await floway.exportUsageSnapshot();
       const usageReport = summarizeUsageWindow(
@@ -389,7 +389,7 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
         users,
       );
       await replyLong(ctx, [
-        '<b>Current primary-window preview</b>',
+        '<b>Current quota-window preview</b>',
         'This previews the active provider observation; it does not report a completed refresh.',
         '',
         formatUsageReports(upstream, [usageReport]),
@@ -397,7 +397,7 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
         quotaEstimate,
       ].join('\n'));
     } catch (error) {
-      await replyError(ctx, 'Failed to send primary window test notification', error);
+      await replyError(ctx, 'Failed to send quota window test notification', error);
     }
   });
 
@@ -609,19 +609,19 @@ export const selectUpstream = (
 const formatQuotaWindowQuotaEstimate = (
   flowayUserId: number,
   upstream: UpstreamRecord,
-  quotaWindow: NonNullable<ReturnType<typeof selectQuotaWindowForUpstream>>,
-  primaryUsedPercent: number | undefined,
+  quotaWindow: ReturnType<typeof quotaObservationToUsageWindow>,
+  usedPercent: number | undefined,
   exportSnapshot: Parameters<typeof summarizeUsageWindow>[3],
   users: Awaited<ReturnType<FlowayClient['listUsers']>>,
 ): string => {
-  if (primaryUsedPercent === undefined) return formatQuotaEstimateNotification(null);
+  if (usedPercent === undefined) return formatQuotaEstimateNotification(null);
 
   const nonAdminUserCount = users.filter(user => canShareUpstreamQuota(user, upstream.id)).length;
   const report = summarizeUsageQuotaEstimate(
     flowayUserId,
     upstream.id,
     quotaWindow,
-    primaryUsedPercent,
+    usedPercent,
     exportSnapshot,
     nonAdminUserCount,
   );
@@ -635,22 +635,22 @@ const formatQuotaWindowResolution = (
 ): string => {
   const subject = `${htmlSafeText(upstream.name)} <code>${htmlSafeText(upstream.id)}</code>`;
   const detail = resolution.status === 'unsupported'
-    ? 'This upstream does not expose Codex primary quota.'
+    ? 'This upstream does not expose Codex quota windows.'
     : resolution.status === 'malformed'
-      ? 'Floway returned an invalid primary quota observation. The last known notifier state was kept.'
+      ? 'Floway returned an invalid quota-window observation. The last known notifier state was kept.'
       : resolution.status === 'ambiguous'
-        ? 'Floway returned conflicting primary quota observations. The last known notifier state was kept.'
-        : 'No primary quota observation is currently available.';
-  return `<b>${surface === 'usage' ? 'Usage unavailable' : surface === 'quota' ? 'Quota estimate unavailable' : 'Primary-window preview unavailable'}</b>\n${subject}\n${detail}`;
+        ? 'Floway returned conflicting quota-window observations. The last known notifier state was kept.'
+        : 'No quota-window observation is currently available.';
+  return `<b>${surface === 'usage' ? 'Usage unavailable' : surface === 'quota' ? 'Quota estimate unavailable' : 'Quota-window preview unavailable'}</b>\n${subject}\n${detail}`;
 };
 
 const formatValidWindowWithoutQuotaPercent = (
   upstream: UpstreamRecord,
-  window: NonNullable<ReturnType<typeof selectQuotaWindowForUpstream>>,
+  window: ReturnType<typeof quotaObservationToUsageWindow>,
 ): string => [
   '<b>Quota estimate unavailable</b>',
   `${htmlSafeText(upstream.name)} <code>${htmlSafeText(upstream.id)}</code>`,
-  `Floway reported the primary window <code>${htmlSafeText(window.startAt)}</code> -&gt; <code>${htmlSafeText(window.endAt)}</code>, but did not report its used percentage.`,
+  `Floway reported the selected quota window <code>${htmlSafeText(window.startAt)}</code> -&gt; <code>${htmlSafeText(window.endAt)}</code>, but did not report its used percentage.`,
 ].join('\n');
 
 const htmlSafeText = (value: string): string => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

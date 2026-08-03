@@ -1,16 +1,16 @@
 import type { UpstreamRecord } from './types.js';
 
-export const PRIMARY_QUOTA_ACTIVE_LIMIT = 'premium';
+export const CODEX_PREMIUM_ACTIVE_LIMIT = 'premium';
 
 const MAX_WINDOW_MINUTES = 31 * 24 * 60;
 const MIN_TOLERANCE_MS = 1_000;
 const MAX_TOLERANCE_MS = 5 * 60 * 60 * 1_000;
 const RFC3339_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:[.](\d+))?(Z|([+-])(\d{2}):(\d{2}))$/;
 
-export interface PrimaryQuotaObservation {
+export interface QuotaWindowObservation {
   upstreamId: string;
   bucketKey: string;
-  activeLimit: typeof PRIMARY_QUOTA_ACTIVE_LIMIT;
+  activeLimit: typeof CODEX_PREMIUM_ACTIVE_LIMIT;
   observedAt: string;
   observedAtMs: number;
   startAt: string;
@@ -21,14 +21,14 @@ export interface PrimaryQuotaObservation {
   usedPercent: number | null;
 }
 
-export type PrimaryQuotaResolution =
-  | { status: 'valid'; observation: PrimaryQuotaObservation }
+export type QuotaWindowResolution =
+  | { status: 'valid'; observation: QuotaWindowObservation }
   | { status: 'missing' }
   | { status: 'unsupported' }
   | { status: 'malformed' }
   | { status: 'ambiguous' };
 
-export type PrimaryQuotaTransition =
+export type QuotaWindowTransition =
   | 'same'
   | 'natural'
   | 'manual'
@@ -37,17 +37,32 @@ export type PrimaryQuotaTransition =
   | 'ambiguous';
 
 type CandidateKind = 'explicit' | 'fallback';
+type ProviderWindowSlot = 'primary' | 'secondary';
+
+interface ParsedWindowFacts {
+  startAt: string;
+  startMs: number;
+  endAt: string;
+  endMs: number;
+  durationMs: number;
+  usedPercent: number | null;
+}
+
+type ParsedWindowSlot =
+  | { status: 'absent' }
+  | { status: 'malformed' }
+  | { status: 'valid'; facts: ParsedWindowFacts };
 
 type ParsedCandidate =
-  | { valid: true; observation: PrimaryQuotaObservation }
-  | { valid: false; observedAtMs: number | null };
+  | { status: 'valid'; observation: QuotaWindowObservation; observedAtMs: number }
+  | { status: 'malformed' | 'ambiguous'; observedAtMs: number | null };
 
 interface QuotaCandidate {
   bucketKey: string;
   snapshot: unknown;
 }
 
-export const resolvePrimaryQuotaObservation = (upstream: UpstreamRecord): PrimaryQuotaResolution => {
+export const resolveQuotaWindowObservation = (upstream: UpstreamRecord): QuotaWindowResolution => {
   try {
     if (!isRecord(upstream) || upstream.kind !== 'codex') return { status: 'unsupported' };
     if (typeof upstream.id !== 'string' || upstream.id.length === 0) return { status: 'malformed' };
@@ -65,7 +80,7 @@ export const resolvePrimaryQuotaObservation = (upstream: UpstreamRecord): Primar
     const explicit: QuotaCandidate[] = [];
     const fallback: QuotaCandidate[] = [];
     for (const [bucketKey, snapshot] of entries) {
-      const kind = primaryQuotaCandidateKind(bucketKey, snapshot);
+      const kind = premiumQuotaCandidateKind(bucketKey, snapshot);
       if (kind === 'explicit') explicit.push({ bucketKey, snapshot });
       if (kind === 'fallback') fallback.push({ bucketKey, snapshot });
     }
@@ -78,28 +93,28 @@ export const resolvePrimaryQuotaObservation = (upstream: UpstreamRecord): Primar
   }
 };
 
-export const parsePrimaryQuotaObservation = (
+export const parseQuotaWindowObservation = (
   upstreamId: string,
   bucketKey: string,
   snapshot: unknown,
-): PrimaryQuotaObservation | null => {
-  if (primaryQuotaCandidateKind(bucketKey, snapshot) === null) return null;
+): QuotaWindowObservation | null => {
+  if (premiumQuotaCandidateKind(bucketKey, snapshot) === null) return null;
   const parsed = parseCandidate(upstreamId, bucketKey, snapshot);
-  return parsed.valid ? parsed.observation : null;
+  return parsed.status === 'valid' ? parsed.observation : null;
 };
 
-export const primaryQuotaToleranceMs = (
-  left: Pick<PrimaryQuotaObservation, 'durationMs'>,
-  right: Pick<PrimaryQuotaObservation, 'durationMs'>,
+export const quotaWindowToleranceMs = (
+  left: Pick<QuotaWindowObservation, 'durationMs'>,
+  right: Pick<QuotaWindowObservation, 'durationMs'>,
 ): number => Math.min(
   MAX_TOLERANCE_MS,
   Math.max(MIN_TOLERANCE_MS, Math.min(left.durationMs, right.durationMs) * 0.03),
 );
 
-export const classifyPrimaryQuotaTransition = (
-  previous: PrimaryQuotaObservation,
-  current: PrimaryQuotaObservation,
-): PrimaryQuotaTransition => {
+export const classifyQuotaWindowTransition = (
+  previous: QuotaWindowObservation,
+  current: QuotaWindowObservation,
+): QuotaWindowTransition => {
   if (previous.upstreamId !== current.upstreamId) return 'ambiguous';
   if (current.observedAtMs < previous.observedAtMs) return 'stale';
   if (
@@ -109,7 +124,7 @@ export const classifyPrimaryQuotaTransition = (
     return 'ambiguous';
   }
 
-  const tolerance = primaryQuotaToleranceMs(previous, current);
+  const tolerance = quotaWindowToleranceMs(previous, current);
   const sameStart = Math.abs(current.startMs - previous.startMs) <= tolerance;
   const sameEnd = Math.abs(current.endMs - previous.endMs) <= tolerance;
   if (sameStart && sameEnd) return 'same';
@@ -139,9 +154,9 @@ export const classifyPrimaryQuotaTransition = (
   return 'ambiguous';
 };
 
-export const matchesPrimaryQuotaCandidate = (
-  candidate: PrimaryQuotaObservation,
-  observation: PrimaryQuotaObservation,
+export const matchesQuotaWindowCandidate = (
+  candidate: QuotaWindowObservation,
+  observation: QuotaWindowObservation,
 ): boolean => {
   if (
     candidate.upstreamId !== observation.upstreamId
@@ -155,7 +170,7 @@ export const matchesPrimaryQuotaCandidate = (
     return sameNormalizedObservation(candidate, observation);
   }
 
-  const tolerance = primaryQuotaToleranceMs(candidate, observation);
+  const tolerance = quotaWindowToleranceMs(candidate, observation);
   return Math.abs(candidate.startMs - observation.startMs) <= tolerance
     && Math.abs(candidate.endMs - observation.endMs) <= tolerance;
 };
@@ -163,23 +178,23 @@ export const matchesPrimaryQuotaCandidate = (
 const resolveCandidates = (
   upstreamId: string,
   candidates: readonly QuotaCandidate[],
-): PrimaryQuotaResolution => {
+): QuotaWindowResolution => {
   const parsed = candidates
     .slice()
     .sort((left, right) => left.bucketKey.localeCompare(right.bucketKey))
     .map(candidate => parseCandidate(upstreamId, candidate.bucketKey, candidate.snapshot));
-  const valid = parsed.filter((candidate): candidate is Extract<ParsedCandidate, { valid: true }> => candidate.valid);
+  if (parsed.some(candidate => candidate.observedAtMs === null)) return { status: 'malformed' };
+
+  const newestObservedAtMs = Math.max(...parsed.map(candidate => candidate.observedAtMs as number));
+  const newest = parsed.filter(candidate => candidate.observedAtMs === newestObservedAtMs);
+  if (newest.some(candidate => candidate.status === 'malformed')) return { status: 'malformed' };
+  if (newest.some(candidate => candidate.status === 'ambiguous')) return { status: 'ambiguous' };
+
+  const valid = newest.filter((candidate): candidate is Extract<ParsedCandidate, { status: 'valid' }> =>
+    candidate.status === 'valid');
   if (valid.length === 0) return { status: 'malformed' };
-
-  const newestObservedAtMs = Math.max(...valid.map(candidate => candidate.observation.observedAtMs));
-  const unresolvedMalformed = parsed.some(candidate =>
-    !candidate.valid
-    && (candidate.observedAtMs === null || candidate.observedAtMs >= newestObservedAtMs));
-  if (unresolvedMalformed) return { status: 'malformed' };
-
-  const newest = valid.filter(candidate => candidate.observation.observedAtMs === newestObservedAtMs);
-  const observation = newest[0]!.observation;
-  if (!newest.every(candidate => sameNormalizedObservation(observation, candidate.observation))) {
+  const observation = valid[0]!.observation;
+  if (!valid.every(candidate => sameNormalizedObservation(observation, candidate.observation))) {
     return { status: 'ambiguous' };
   }
   return { status: 'valid', observation };
@@ -190,40 +205,79 @@ const parseCandidate = (
   bucketKey: string,
   snapshot: unknown,
 ): ParsedCandidate => {
-  if (!isRecord(snapshot)) return { valid: false, observedAtMs: null };
+  if (!isRecord(snapshot)) return { status: 'malformed', observedAtMs: null };
 
   const observed = parseRfc3339(snapshot.observed_at);
   const observedAtMs = observed?.ms ?? null;
   const normalizedBucketKey = normalizeName(bucketKey);
-  const minutes = snapshot.primary_window_minutes;
-  const end = parseRfc3339(snapshot.primary_reset_after_at);
-  const usedPercent = snapshot.primary_used_percent;
+  if (observed === null || normalizedBucketKey === null) {
+    return { status: 'malformed', observedAtMs };
+  }
+
+  const slots = [
+    parseWindowSlot(snapshot, 'primary'),
+    parseWindowSlot(snapshot, 'secondary'),
+  ];
+  if (slots.some(slot => slot.status === 'malformed')) {
+    return { status: 'malformed', observedAtMs };
+  }
+
+  const valid = slots.filter((slot): slot is Extract<ParsedWindowSlot, { status: 'valid' }> =>
+    slot.status === 'valid');
+  if (valid.length === 0) return { status: 'malformed', observedAtMs };
+
+  const latestEndMs = Math.max(...valid.map(slot => slot.facts.endMs));
+  const latest = valid.filter(slot => slot.facts.endMs === latestEndMs);
+  const longestDurationMs = Math.max(...latest.map(slot => slot.facts.durationMs));
+  const selected = latest.filter(slot => slot.facts.durationMs === longestDurationMs);
+  const facts = selected[0]!.facts;
+  if (!selected.every(slot => sameWindowFacts(facts, slot.facts))) {
+    return { status: 'ambiguous', observedAtMs };
+  }
+
+  return {
+    status: 'valid',
+    observedAtMs: observed.ms,
+    observation: {
+      upstreamId,
+      bucketKey: normalizedBucketKey,
+      activeLimit: CODEX_PREMIUM_ACTIVE_LIMIT,
+      observedAt: observed.iso,
+      observedAtMs: observed.ms,
+      ...facts,
+    },
+  };
+};
+
+const parseWindowSlot = (
+  snapshot: Record<string, unknown>,
+  slot: ProviderWindowSlot,
+): ParsedWindowSlot => {
+  const minutes = snapshot[`${slot}_window_minutes`];
+  const resetAt = snapshot[`${slot}_reset_after_at`];
+  const usedPercent = snapshot[`${slot}_used_percent`];
+  if (minutes === undefined && resetAt === undefined && usedPercent === undefined) {
+    return { status: 'absent' };
+  }
+
+  const end = parseRfc3339(resetAt);
   if (
-    observed === null
-    || normalizedBucketKey === null
-    || !Number.isSafeInteger(minutes)
+    !Number.isSafeInteger(minutes)
     || (minutes as number) <= 0
     || (minutes as number) > MAX_WINDOW_MINUTES
     || end === null
     || !validUsedPercent(usedPercent)
   ) {
-    return { valid: false, observedAtMs };
+    return { status: 'malformed' };
   }
 
   const durationMs = (minutes as number) * 60_000;
   const startMs = end.ms - durationMs;
-  if (!Number.isFinite(startMs) || startMs >= end.ms) {
-    return { valid: false, observedAtMs };
-  }
+  if (!Number.isFinite(startMs) || startMs >= end.ms) return { status: 'malformed' };
 
   return {
-    valid: true,
-    observation: {
-      upstreamId,
-      bucketKey: normalizedBucketKey,
-      activeLimit: PRIMARY_QUOTA_ACTIVE_LIMIT,
-      observedAt: observed.iso,
-      observedAtMs: observed.ms,
+    status: 'valid',
+    facts: {
       startAt: new Date(startMs).toISOString(),
       startMs,
       endAt: end.iso,
@@ -234,35 +288,41 @@ const parseCandidate = (
   };
 };
 
-const primaryQuotaCandidateKind = (bucketKey: string, snapshot: unknown): CandidateKind | null => {
+const premiumQuotaCandidateKind = (bucketKey: string, snapshot: unknown): CandidateKind | null => {
   if (!isRecord(snapshot)) {
-    return normalizeName(bucketKey) === PRIMARY_QUOTA_ACTIVE_LIMIT ? 'fallback' : null;
+    return normalizeName(bucketKey) === CODEX_PREMIUM_ACTIVE_LIMIT ? 'fallback' : null;
   }
   if (snapshot.active_limit !== undefined) {
-    return normalizeName(snapshot.active_limit) === PRIMARY_QUOTA_ACTIVE_LIMIT ? 'explicit' : null;
+    return normalizeName(snapshot.active_limit) === CODEX_PREMIUM_ACTIVE_LIMIT ? 'explicit' : null;
   }
-  return normalizeName(bucketKey) === PRIMARY_QUOTA_ACTIVE_LIMIT ? 'fallback' : null;
+  return normalizeName(bucketKey) === CODEX_PREMIUM_ACTIVE_LIMIT ? 'fallback' : null;
 };
 
 const validUsedPercent = (value: unknown): boolean =>
   value === undefined
   || (typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100);
 
+const sameWindowFacts = (
+  left: ParsedWindowFacts,
+  right: ParsedWindowFacts,
+): boolean =>
+  left.startAt === right.startAt
+  && left.startMs === right.startMs
+  && left.endAt === right.endAt
+  && left.endMs === right.endMs
+  && left.durationMs === right.durationMs
+  && Object.is(left.usedPercent, right.usedPercent);
+
 const sameNormalizedObservation = (
-  left: PrimaryQuotaObservation,
-  right: PrimaryQuotaObservation,
+  left: QuotaWindowObservation,
+  right: QuotaWindowObservation,
 ): boolean =>
   left.upstreamId === right.upstreamId
   && left.bucketKey === right.bucketKey
   && left.activeLimit === right.activeLimit
   && left.observedAt === right.observedAt
   && left.observedAtMs === right.observedAtMs
-  && left.startAt === right.startAt
-  && left.startMs === right.startMs
-  && left.endAt === right.endAt
-  && left.endMs === right.endMs
-  && left.durationMs === right.durationMs
-  && left.usedPercent === right.usedPercent;
+  && sameWindowFacts(left, right);
 
 const normalizeName = (value: unknown): string | null => {
   if (typeof value !== 'string') return null;

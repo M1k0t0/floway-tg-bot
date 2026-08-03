@@ -67,6 +67,9 @@ export interface CodexQuotaSnapshot {
   primary_used_percent?: number;
   primary_window_minutes?: number;
   primary_reset_after_at?: string;
+  secondary_used_percent?: number;
+  secondary_window_minutes?: number;
+  secondary_reset_after_at?: string;
   credits_has_credits?: boolean;
   credits_balance?: number;
   ratelimited_until?: string;

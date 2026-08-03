@@ -30,7 +30,7 @@
 `floway-tg-bot` is a Telegram bot for Floway users. It lets a Telegram user
 bind a Floway account, manage that user's Floway API keys, inspect allowed
 upstreams, view usage/quota details, view leaderboard summaries, and receive
-private primary-window refresh notifications.
+private quota-window refresh notifications.
 
 Stack: TypeScript, Node.js, Telegraf, `node:sqlite`, pnpm, Vitest, ESLint.
 The production runtime is a long-running Node process. `dist/` is generated
@@ -57,7 +57,7 @@ floway-tg-bot/
 │   ├── quota-window.ts             # normalized quota observations and window transition classification
 │   ├── usage.ts                    # usage aggregation and quota estimate calculations
 │   ├── format.ts                   # Telegram HTML formatting helpers
-│   ├── primary-window-notifier.ts # upstream primary-window polling and notification logic
+│   ├── quota-window-notifier.ts    # selected quota-window polling and notification logic
 │   ├── deeplink.ts                 # Telegram /start bind payload helpers
 │   ├── make-bind-link.ts           # CLI for bind links
 │   └── types.ts                    # shared Floway and bot types
@@ -82,20 +82,26 @@ When adding or changing commands:
 - Preserve Floway upstream access checks. A bound user must not see upstreams
   outside their Floway `upstreamIds` restriction.
 
-## Primary Window Notifications
+## Quota Window Notifications
 
-`src/primary-window-notifier.ts` polls available upstreams and sends each
-eligible bound user a private notification when a usable upstream's primary
-window advances.
+`src/quota-window-notifier.ts` polls available upstreams and sends each
+eligible bound user a private notification when a usable upstream's selected
+quota window advances.
 
 Important invariants:
 
+- Resolve the `premium` active-limit snapshot independently from provider window
+  slots. Within the eligible snapshot, parse both `primary_*` and `secondary_*`
+  fields and select the valid window whose exact `reset_after_at` is latest;
+  equal resets prefer the longer duration. Never use the slot label as the
+  reporting-window identity.
 - Normalize provider timestamps to exact instants. Classify observations against an
   immutable anchor with a duration-relative tolerance capped at five hours; tolerated
   drift updates observation metadata but never moves the anchor.
 - Create refresh events only after two matching provider observations. Missing,
   malformed, stale, or ambiguous quota data must not synthesize elapsed windows or
-  erase the last valid cursor.
+  erase the last valid cursor. A provider slot relabel with the same normalized facts
+  is the same observation and must not restart confirmation.
 - Treat a new window that starts inside the stored window and extends past it
   as an upstream early/manual refresh. Report the stored window truncated at
   the new start and include an explicit notification note.
@@ -130,7 +136,7 @@ FLOWAY_ADMIN_KEY=
 BOT_DB_PATH=./data/bot.sqlite
 BOT_SECRET_KEY=
 USAGE_EXPORT_CACHE_TTL_SECONDS=30
-PRIMARY_WINDOW_NOTIFY_INTERVAL_SECONDS=300
+QUOTA_WINDOW_NOTIFY_INTERVAL_SECONDS=300
 ```
 
 Generate `BOT_SECRET_KEY` with `openssl rand -base64 32`. Floway sessions are
@@ -158,7 +164,7 @@ completion when the change has shared behavior:
 
 ```bash
 ./node_modules/.bin/vitest run test/db-migrations.test.ts test/db.test.ts --maxWorkers=1 --no-file-parallelism
-./node_modules/.bin/vitest run test/primary-window-notifier.test.ts --maxWorkers=1 --no-file-parallelism
+./node_modules/.bin/vitest run test/quota-window-notifier.test.ts --maxWorkers=1 --no-file-parallelism
 ./node_modules/.bin/vitest run test/format.test.ts --maxWorkers=1 --no-file-parallelism
 ./node_modules/.bin/tsc --noEmit -p tsconfig.json --pretty false
 ./node_modules/.bin/tsc -p tsconfig.build.json --pretty false
@@ -176,5 +182,5 @@ process manager such as systemd.
 Do not deploy, restart, or stop the production bot unless the user explicitly
 asks. When deployment is requested, announce that the restart/deploy is
 starting, build first, preserve `.env` and `BOT_DB_PATH`, and let shutdown
-complete so the primary-window notifier finishes any active poll before the
+complete so the quota-window notifier finishes any active poll before the
 SQLite store is closed.

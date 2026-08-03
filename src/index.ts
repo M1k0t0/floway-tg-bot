@@ -4,7 +4,7 @@ import { createBot, registerBotCommands } from './bot.js';
 import { loadConfig } from './config.js';
 import { BindingStore } from './db.js';
 import { FlowayClient } from './floway-client.js';
-import { PrimaryWindowNotifier } from './primary-window-notifier.js';
+import { QuotaWindowNotifier } from './quota-window-notifier.js';
 
 const config = loadConfig();
 const store = new BindingStore(config.botDbPath, config.botSecretKey);
@@ -15,11 +15,11 @@ const floway = new FlowayClient({
 });
 
 const bot = createBot(config, store, floway);
-const primaryWindowNotifier = new PrimaryWindowNotifier({
+const quotaWindowNotifier = new QuotaWindowNotifier({
   store,
   floway,
   bot,
-  intervalSeconds: config.primaryWindowNotifyIntervalSeconds,
+  intervalSeconds: config.quotaWindowNotifyIntervalSeconds,
 });
 
 let shuttingDown = false;
@@ -75,7 +75,7 @@ const waitForLaunchToSettleWithin = async (promise: Promise<void>, milliseconds:
 const startNotifier = (): void => {
   if (shuttingDown || notifierStarted) return;
   notifierStarted = true;
-  primaryWindowNotifier.start();
+  quotaWindowNotifier.start();
   console.log('Floway Telegram bot started');
 };
 
@@ -91,7 +91,7 @@ const shutdown = async (signal: string): Promise<void> => {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`Received ${signal}, stopping bot`);
-  const notifierStopped = primaryWindowNotifier.stop();
+  const notifierStopped = quotaWindowNotifier.stop();
   if (launchPromise && !isBotRuntimeStarted()) {
     const runtimeWaitResult = await waitForBotRuntimeWithin(launchPromise, SHUTDOWN_LAUNCH_WAIT_TIMEOUT_MS);
     if (runtimeWaitResult === 'timeout') {

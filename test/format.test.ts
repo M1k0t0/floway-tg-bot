@@ -7,7 +7,7 @@ import {
   formatQuotaEstimate,
   formatQuotaEstimateNotification,
   formatQuotaEstimateVerbose,
-  formatPrimaryWindowNotification,
+  formatQuotaWindowNotification,
   formatStartHelp,
   formatUpstreamList,
   formatUsageLeaderboard,
@@ -305,7 +305,7 @@ describe('formatters', () => {
       userRequestSharePercent: 25,
     };
 
-    const text = formatPrimaryWindowNotification(upstream, report, '<b>Quota estimate</b>');
+    const text = formatQuotaWindowNotification(upstream, report, '<b>Quota estimate</b>');
 
     expect(text).toContain('<b>Primary window refreshed</b>');
     expect(text).toContain('<b>Codex &lt;main&gt;&amp;</b> <code>up_a</code>');
@@ -315,7 +315,7 @@ describe('formatters', () => {
     expect(text).toContain('\n\n<b>Quota estimate</b>');
     expect(text).not.toContain('<b>Window note</b>');
 
-    const noted = formatPrimaryWindowNotification(upstream, report, '<b>Quota estimate</b>', 'Manual <refresh>&');
+    const noted = formatQuotaWindowNotification(upstream, report, '<b>Quota estimate</b>', 'Manual <refresh>&');
     expect(noted).toContain('<b>Window note</b>: Manual &lt;refresh&gt;&amp;');
   });
 });

@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  classifyPrimaryQuotaTransition,
-  matchesPrimaryQuotaCandidate,
-  primaryQuotaToleranceMs,
-  resolvePrimaryQuotaObservation,
-  type PrimaryQuotaObservation,
+  classifyQuotaWindowTransition,
+  matchesQuotaWindowCandidate,
+  quotaWindowToleranceMs,
+  resolveQuotaWindowObservation,
+  type QuotaWindowObservation,
 } from '../src/quota-window.js';
 import type { CodexQuotaSnapshot, UpstreamRecord } from '../src/types.js';
 
@@ -44,7 +44,7 @@ const upstream = (
   codex_quota: codexQuota as Record<string, CodexQuotaSnapshot> | null,
 });
 
-const validObservation = (overrides: Partial<PrimaryQuotaObservation> = {}): PrimaryQuotaObservation => ({
+const validObservation = (overrides: Partial<QuotaWindowObservation> = {}): QuotaWindowObservation => ({
   upstreamId: 'upstream-a',
   bucketKey: 'premium',
   activeLimit: 'premium',
@@ -63,8 +63,8 @@ const observationAt = (
   startAt: string,
   endAt: string,
   observedAt = endAt,
-  overrides: Partial<PrimaryQuotaObservation> = {},
-): PrimaryQuotaObservation => validObservation({
+  overrides: Partial<QuotaWindowObservation> = {},
+): QuotaWindowObservation => validObservation({
   observedAt,
   observedAtMs: Date.parse(observedAt),
   startAt,
@@ -75,12 +75,12 @@ const observationAt = (
   ...overrides,
 });
 
-describe('resolvePrimaryQuotaObservation', () => {
+describe('resolveQuotaWindowObservation', () => {
   it('returns unsupported and missing without manufacturing observations', () => {
-    expect(resolvePrimaryQuotaObservation(upstream(null, 'copilot'))).toEqual({ status: 'unsupported' });
-    expect(resolvePrimaryQuotaObservation(upstream(null))).toEqual({ status: 'missing' });
-    expect(resolvePrimaryQuotaObservation(upstream({}))).toEqual({ status: 'missing' });
-    expect(resolvePrimaryQuotaObservation(upstream({ enterprise: snapshot(
+    expect(resolveQuotaWindowObservation(upstream(null, 'copilot'))).toEqual({ status: 'unsupported' });
+    expect(resolveQuotaWindowObservation(upstream(null))).toEqual({ status: 'missing' });
+    expect(resolveQuotaWindowObservation(upstream({}))).toEqual({ status: 'missing' });
+    expect(resolveQuotaWindowObservation(upstream({ enterprise: snapshot(
       '2026-07-01T01:00:00Z',
       '2026-07-01T02:00:00Z',
       { active_limit: 'enterprise' },
@@ -94,7 +94,7 @@ describe('resolvePrimaryQuotaObservation', () => {
       { active_limit: ' Premium ', primary_window_minutes: 90 },
     );
     delete quota.primary_used_percent;
-    const result = resolvePrimaryQuotaObservation(upstream({ plus: quota }));
+    const result = resolveQuotaWindowObservation(upstream({ plus: quota }));
 
     expect(result).toEqual({
       status: 'valid',
@@ -117,11 +117,11 @@ describe('resolvePrimaryQuotaObservation', () => {
   it('uses the premium key only when active_limit is absent', () => {
     const fallback = snapshot('2026-07-01T01:00:00Z', '2026-07-01T02:00:00Z');
     delete fallback.active_limit;
-    expect(resolvePrimaryQuotaObservation(upstream({ ' Premium ': fallback }))).toMatchObject({
+    expect(resolveQuotaWindowObservation(upstream({ ' Premium ': fallback }))).toMatchObject({
       status: 'valid',
       observation: { bucketKey: 'premium', activeLimit: 'premium' },
     });
-    expect(resolvePrimaryQuotaObservation(upstream({ premium: {
+    expect(resolveQuotaWindowObservation(upstream({ premium: {
       ...fallback,
       active_limit: 'enterprise',
     } }))).toEqual({ status: 'missing' });
@@ -130,7 +130,7 @@ describe('resolvePrimaryQuotaObservation', () => {
   it('gives explicit premium candidates precedence over fallback candidates', () => {
     const fallback = snapshot('2026-07-01T03:00:00Z', '2026-07-01T04:00:00Z');
     delete fallback.active_limit;
-    const result = resolvePrimaryQuotaObservation(upstream({
+    const result = resolveQuotaWindowObservation(upstream({
       premium: fallback,
       plus: snapshot('2026-07-01T01:00:00Z', '2026-07-01T02:00:00Z'),
     }));
@@ -157,13 +157,13 @@ describe('resolvePrimaryQuotaObservation', () => {
     ];
 
     for (const quota of malformed) {
-      expect(() => resolvePrimaryQuotaObservation(upstream(quota))).not.toThrow();
-      expect(resolvePrimaryQuotaObservation(upstream(quota))).toEqual({ status: 'malformed' });
+      expect(() => resolveQuotaWindowObservation(upstream(quota))).not.toThrow();
+      expect(resolveQuotaWindowObservation(upstream(quota))).toEqual({ status: 'malformed' });
     }
   });
 
   it('selects the newest valid explicit candidate and lets it supersede older malformed data', () => {
-    const result = resolvePrimaryQuotaObservation(upstream({
+    const result = resolveQuotaWindowObservation(upstream({
       broken: {
         observed_at: '2026-07-01T01:00:00Z',
         active_limit: 'premium',
@@ -177,7 +177,7 @@ describe('resolvePrimaryQuotaObservation', () => {
 
   it('keeps malformed status when malformed explicit data is not strictly older', () => {
     for (const observedAt of ['2026-07-01T02:00:00Z', '2026-07-01T03:00:00Z', 'bad']) {
-      const result = resolvePrimaryQuotaObservation(upstream({
+      const result = resolveQuotaWindowObservation(upstream({
         valid: snapshot('2026-07-01T02:00:00Z', '2026-07-01T03:00:00Z'),
         broken: snapshot(observedAt, 'bad'),
       }));
@@ -187,7 +187,7 @@ describe('resolvePrimaryQuotaObservation', () => {
 
   it('coalesces identical newest candidates and rejects equal-time conflicts', () => {
     const common = snapshot('2026-07-01T02:00:00Z', '2026-07-01T03:00:00Z');
-    expect(resolvePrimaryQuotaObservation(upstream({ a: common, aCopy: { ...common } }))).toEqual({
+    expect(resolveQuotaWindowObservation(upstream({ a: common, aCopy: { ...common } }))).toEqual({
       status: 'ambiguous',
     });
 
@@ -195,11 +195,11 @@ describe('resolvePrimaryQuotaObservation', () => {
     const fallbackB = { ...common };
     delete fallbackA.active_limit;
     delete fallbackB.active_limit;
-    expect(resolvePrimaryQuotaObservation(upstream({ premium: fallbackA, ' Premium ': fallbackB }))).toMatchObject({
+    expect(resolveQuotaWindowObservation(upstream({ premium: fallbackA, ' Premium ': fallbackB }))).toMatchObject({
       status: 'valid',
     });
 
-    expect(resolvePrimaryQuotaObservation(upstream({
+    expect(resolveQuotaWindowObservation(upstream({
       a: common,
       b: { ...common, primary_used_percent: 26 },
     }))).toEqual({ status: 'ambiguous' });
@@ -208,39 +208,39 @@ describe('resolvePrimaryQuotaObservation', () => {
 
 describe('primary quota transitions', () => {
   it('uses adaptive tolerance bounded from one second to five hours', () => {
-    expect(primaryQuotaToleranceMs(validObservation({ durationMs: 10_000 }), validObservation())).toBe(1_000);
-    expect(primaryQuotaToleranceMs(validObservation({ durationMs: 60 * 60_000 }), validObservation())).toBe(108_000);
-    expect(primaryQuotaToleranceMs(validObservation({ durationMs: 31 * 24 * 60 * 60_000 }), validObservation({ durationMs: 31 * 24 * 60 * 60_000 }))).toBe(5 * 60 * 60_000);
+    expect(quotaWindowToleranceMs(validObservation({ durationMs: 10_000 }), validObservation())).toBe(1_000);
+    expect(quotaWindowToleranceMs(validObservation({ durationMs: 60 * 60_000 }), validObservation())).toBe(108_000);
+    expect(quotaWindowToleranceMs(validObservation({ durationMs: 31 * 24 * 60 * 60_000 }), validObservation({ durationMs: 31 * 24 * 60 * 60_000 }))).toBe(5 * 60 * 60_000);
   });
 
   it('classifies stable, natural, manual, stale, regressive, and ambiguous updates', () => {
     const previous = observationAt('2026-07-01T00:00:00Z', '2026-07-01T01:00:00Z', '2026-07-01T00:30:00Z');
-    expect(classifyPrimaryQuotaTransition(previous, observationAt(
+    expect(classifyQuotaWindowTransition(previous, observationAt(
       '2026-07-01T00:01:00Z',
       '2026-07-01T01:01:00Z',
       '2026-07-01T00:31:00Z',
     ))).toBe('same');
-    expect(classifyPrimaryQuotaTransition(previous, observationAt(
+    expect(classifyQuotaWindowTransition(previous, observationAt(
       '2026-07-01T01:00:00Z',
       '2026-07-01T02:00:00Z',
       '2026-07-01T01:01:00Z',
     ))).toBe('natural');
-    expect(classifyPrimaryQuotaTransition(previous, observationAt(
+    expect(classifyQuotaWindowTransition(previous, observationAt(
       '2026-07-01T00:30:00Z',
       '2026-07-01T01:30:00Z',
       '2026-07-01T00:31:00Z',
     ))).toBe('manual');
-    expect(classifyPrimaryQuotaTransition(previous, observationAt(
+    expect(classifyQuotaWindowTransition(previous, observationAt(
       '2026-07-01T00:00:00Z',
       '2026-07-01T01:00:00Z',
       '2026-07-01T00:29:00Z',
     ))).toBe('stale');
-    expect(classifyPrimaryQuotaTransition(previous, observationAt(
+    expect(classifyQuotaWindowTransition(previous, observationAt(
       '2026-06-30T23:00:00Z',
       '2026-07-01T00:00:00Z',
       '2026-07-01T00:31:00Z',
     ))).toBe('regressive');
-    expect(classifyPrimaryQuotaTransition(previous, observationAt(
+    expect(classifyQuotaWindowTransition(previous, observationAt(
       '2026-07-01T00:30:00Z',
       '2026-07-01T01:00:00Z',
       '2026-07-01T00:31:00Z',
@@ -254,13 +254,13 @@ describe('primary quota transitions', () => {
       endMs: Date.parse('2026-07-01T01:01:00.000Z'),
       usedPercent: 26,
     });
-    expect(classifyPrimaryQuotaTransition(candidate, conflict)).toBe('ambiguous');
-    expect(matchesPrimaryQuotaCandidate(candidate, conflict)).toBe(false);
+    expect(classifyQuotaWindowTransition(candidate, conflict)).toBe('ambiguous');
+    expect(matchesQuotaWindowCandidate(candidate, conflict)).toBe(false);
   });
 
   it('matches later pending observations only within adaptive tolerance', () => {
     const candidate = validObservation();
-    expect(matchesPrimaryQuotaCandidate(candidate, validObservation({
+    expect(matchesQuotaWindowCandidate(candidate, validObservation({
       observedAt: '2026-07-01T01:01:00.000Z',
       observedAtMs: Date.parse('2026-07-01T01:01:00.000Z'),
       startAt: '2026-07-01T00:01:00.000Z',
@@ -269,7 +269,7 @@ describe('primary quota transitions', () => {
       endMs: Date.parse('2026-07-01T01:01:00.000Z'),
       usedPercent: 30,
     }))).toBe(true);
-    expect(matchesPrimaryQuotaCandidate(candidate, validObservation({
+    expect(matchesQuotaWindowCandidate(candidate, validObservation({
       observedAt: '2026-07-01T01:01:00.000Z',
       observedAtMs: Date.parse('2026-07-01T01:01:00.000Z'),
       startAt: '2026-07-01T00:03:00.000Z',

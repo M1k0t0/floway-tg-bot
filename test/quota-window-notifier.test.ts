@@ -7,10 +7,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   BindingStore,
-  type NewPrimaryWindowEvent,
-  type PrimaryWindowFacts,
+  type NewQuotaWindowEvent,
+  type QuotaWindowFacts,
 } from '../src/db.js';
-import { PrimaryWindowNotifier } from '../src/primary-window-notifier.js';
+import { QuotaWindowNotifier } from '../src/quota-window-notifier.js';
 import type {
   AuthMeResponse,
   FlowayAdminUser,
@@ -53,7 +53,7 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-describe('PrimaryWindowNotifier', () => {
+describe('QuotaWindowNotifier', () => {
   it('silently seeds the first provider observation', async () => {
     vi.useFakeTimers();
     vi.setSystemTime('2026-06-01T04:55:00.000Z');
@@ -345,7 +345,7 @@ const createRuntime = (
     exportUsageSnapshot,
   };
   return {
-    notifier: new PrimaryWindowNotifier({ store, floway, bot: { telegram: { sendMessage } }, intervalSeconds: 300 }),
+    notifier: new QuotaWindowNotifier({ store, floway, bot: { telegram: { sendMessage } }, intervalSeconds: 300 }),
     floway,
     sendMessage,
     exportUsageSnapshot,
@@ -418,7 +418,7 @@ const seedPendingDelivery = (store: BindingStore, bindingId: number): void => {
     observedAtMs: current.observedAtMs,
     firstSeenAtMs: Date.parse('2026-06-01T05:02:00.000Z'),
   });
-  const event: NewPrimaryWindowEvent = {
+  const event: NewQuotaWindowEvent = {
     upstreamId: 'up_a',
     fromRevision: 0,
     toRevision: 1,
@@ -433,7 +433,7 @@ const seedPendingDelivery = (store: BindingStore, bindingId: number): void => {
   expect(store.commitTransition(0, event, [bindingId], Date.parse('2026-06-01T05:02:00.000Z')).status).toBe('committed');
 };
 
-const facts = (startAt: string, endAt: string, observedAt: string, usedPercent: number): PrimaryWindowFacts => ({
+const facts = (startAt: string, endAt: string, observedAt: string, usedPercent: number): QuotaWindowFacts => ({
   startAtMs: Date.parse(startAt),
   endAtMs: Date.parse(endAt),
   durationMs: Date.parse(endAt) - Date.parse(startAt),

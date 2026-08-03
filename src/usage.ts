@@ -1,8 +1,8 @@
 import {
-  parsePrimaryQuotaObservation,
-  PRIMARY_QUOTA_ACTIVE_LIMIT,
-  resolvePrimaryQuotaObservation,
-  type PrimaryQuotaObservation,
+  parseQuotaWindowObservation,
+  CODEX_PREMIUM_ACTIVE_LIMIT,
+  resolveQuotaWindowObservation,
+  type QuotaWindowObservation,
 } from './quota-window.js';
 import type {
   BillingDimension,
@@ -27,7 +27,7 @@ export const BILLING_DIMENSIONS: readonly BillingDimension[] = [
 ];
 
 export interface UsageWindow {
-  label: 'Primary window';
+  label: 'Quota window';
   startHour: string;
   endHour: string;
   startAt: string;
@@ -47,7 +47,7 @@ export interface CodexQuotaBucket {
   snapshot: CodexQuotaSnapshot;
 }
 
-export const CODEX_QUOTA_ACTIVE_LIMIT = PRIMARY_QUOTA_ACTIVE_LIMIT;
+export const CODEX_QUOTA_ACTIVE_LIMIT = CODEX_PREMIUM_ACTIVE_LIMIT;
 
 export interface UsageWindowReport {
   window: UsageWindow;
@@ -226,17 +226,37 @@ const normalizeCodexQuotaActiveLimit = (value: unknown): string | null => {
   return normalized || null;
 };
 
-export const selectPrimaryQuotaWindowForUpstream = (upstream: Pick<UpstreamRecord, 'id' | 'kind' | 'codex_quota'>): UsageWindow | null => {
-  const resolution = resolvePrimaryQuotaObservation(upstream as UpstreamRecord);
-  return resolution.status === 'valid' ? observationToUsageWindow(resolution.observation) : null;
+export const selectQuotaWindowForUpstream = (upstream: Pick<UpstreamRecord, 'id' | 'kind' | 'codex_quota'>): UsageWindow | null => {
+  const resolution = resolveQuotaWindowObservation(upstream as UpstreamRecord);
+  return resolution.status === 'valid' ? quotaObservationToUsageWindow(resolution.observation) : null;
 };
 
-export const buildPrimaryQuotaWindow = (
+export const quotaObservationToUsageWindow = (observation: QuotaWindowObservation): UsageWindow => {
+  const start = new Date(observation.startMs);
+  const end = new Date(observation.endMs);
+  return {
+    label: 'Quota window',
+    startAt: observation.startAt,
+    endAt: observation.endAt,
+    startHour: hourString(start),
+    endHour: hourString(end),
+    observedAt: observation.observedAt,
+    observedAtMs: observation.observedAtMs,
+    startMs: observation.startMs,
+    endMs: observation.endMs,
+    durationMs: observation.durationMs,
+    ...(observation.usedPercent !== null ? { upstreamPercent: observation.usedPercent } : {}),
+    quotaBucketKey: observation.bucketKey,
+    quotaActiveLimit: observation.activeLimit,
+  };
+};
+
+export const buildQuotaWindow = (
   quota: WindowQuotaSnapshot | null | undefined,
   bucket?: Pick<CodexQuotaBucket, 'key' | 'snapshot'>,
 ): UsageWindow | null => {
   if (!quota) return null;
-  const observation = parsePrimaryQuotaObservation(
+  const observation = parseQuotaWindowObservation(
     'legacy',
     bucket?.key ?? CODEX_QUOTA_ACTIVE_LIMIT,
     {
@@ -244,7 +264,7 @@ export const buildPrimaryQuotaWindow = (
       active_limit: quota.active_limit ?? bucket?.snapshot.active_limit,
     },
   );
-  return observation ? observationToUsageWindow(observation) : null;
+  return observation ? quotaObservationToUsageWindow(observation) : null;
 };
 
 export const summarizeUsageWindow = (
@@ -396,26 +416,6 @@ const compareByCachePercent = (a: UsageLeaderboardEntry, b: UsageLeaderboardEntr
 const validDateOrFallback = (value: string, fallback: Date): Date => {
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? date : fallback;
-};
-
-const observationToUsageWindow = (observation: PrimaryQuotaObservation): UsageWindow => {
-  const start = new Date(observation.startMs);
-  const end = new Date(observation.endMs);
-  return {
-    label: 'Primary window',
-    startAt: observation.startAt,
-    endAt: observation.endAt,
-    startHour: hourString(start),
-    endHour: hourString(end),
-    observedAt: observation.observedAt,
-    observedAtMs: observation.observedAtMs,
-    startMs: observation.startMs,
-    endMs: observation.endMs,
-    durationMs: observation.durationMs,
-    ...(observation.usedPercent !== null ? { upstreamPercent: observation.usedPercent } : {}),
-    quotaBucketKey: observation.bucketKey,
-    quotaActiveLimit: observation.activeLimit,
-  };
 };
 
 const isQuotaSnapshotMap = (value: unknown): value is Record<string, unknown> =>

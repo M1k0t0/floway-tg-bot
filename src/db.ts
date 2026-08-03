@@ -116,7 +116,7 @@ export type DatabaseRowErrorCode = 'invalid-row' | 'decrypt-failed';
 
 export class DatabaseRowError extends Error {
   constructor(
-    public readonly table: 'bindings' | 'primary_window_cursor' | 'primary_window_event' | 'primary_window_delivery',
+    public readonly table: 'bindings' | 'quota_window_cursor' | 'quota_window_event' | 'quota_window_delivery',
     public readonly rowIdentifier: string,
     public readonly code: DatabaseRowErrorCode = 'invalid-row',
   ) {
@@ -154,67 +154,67 @@ export interface BindingExpectation {
 
 export type DeleteBindingResult = 'deleted' | 'missing' | 'stale';
 
-export interface PrimaryWindowAnchor {
+export interface QuotaWindowAnchor {
   startAtMs: number;
   endAtMs: number;
   durationMs: number;
   observedAtMs: number;
 }
 
-export interface PrimaryWindowFacts extends PrimaryWindowAnchor {
+export interface QuotaWindowFacts extends QuotaWindowAnchor {
   usedPercent: number | null;
   quotaBucketKey: string | null;
   activeLimit: string | null;
 }
 
-export type PrimaryWindowTransitionKind = 'natural' | 'manual';
+export type QuotaWindowTransitionKind = 'natural' | 'manual';
 
-export interface PendingPrimaryWindowCandidate extends PrimaryWindowAnchor {
-  kind: PrimaryWindowTransitionKind;
+export interface PendingQuotaWindowCandidate extends QuotaWindowAnchor {
+  kind: QuotaWindowTransitionKind;
   firstSeenAtMs: number;
   observationCount: number;
 }
 
-export interface PrimaryWindowCursor {
+export interface QuotaWindowCursor {
   upstreamId: string;
   revision: number;
-  anchor: PrimaryWindowAnchor;
-  latest: PrimaryWindowFacts;
-  pending: PendingPrimaryWindowCandidate | null;
+  anchor: QuotaWindowAnchor;
+  latest: QuotaWindowFacts;
+  pending: PendingQuotaWindowCandidate | null;
 }
 
-export interface NewPrimaryWindowEvent {
+export interface NewQuotaWindowEvent {
   upstreamId: string;
   fromRevision: number;
   toRevision: number;
   upstreamKind: string;
   upstreamName: string;
-  kind: PrimaryWindowTransitionKind;
-  previous: PrimaryWindowFacts;
-  current: PrimaryWindowFacts;
+  kind: QuotaWindowTransitionKind;
+  previous: QuotaWindowFacts;
+  current: QuotaWindowFacts;
   detectedAtMs: number;
   effectivePreviousUsageEndAtMs: number | null;
 }
 
-export interface PrimaryWindowEvent extends NewPrimaryWindowEvent {
+export interface QuotaWindowEvent extends NewQuotaWindowEvent {
   eventId: number;
 }
 
 export type CursorMutationResult =
-  | { status: 'updated'; cursor: PrimaryWindowCursor }
+  | { status: 'updated'; cursor: QuotaWindowCursor }
   | { status: 'missing' | 'stale' | 'candidate-mismatch' };
 
 export type SeedCursorResult =
-  | { status: 'seeded'; cursor: PrimaryWindowCursor }
-  | { status: 'exists'; cursor: PrimaryWindowCursor };
+  | { status: 'seeded'; cursor: QuotaWindowCursor }
+  | { status: 'exists'; cursor: QuotaWindowCursor };
 
 export type CommitTransitionResult =
-  | { status: 'committed'; event: PrimaryWindowEvent; deliveryCount: number }
+  | { status: 'committed'; event: QuotaWindowEvent; deliveryCount: number }
   | { status: 'missing' | 'stale' | 'candidate-mismatch' };
 
 export type DeliveryStatus = 'pending' | 'leased' | 'sent' | 'skipped' | 'dead';
 
-export interface PrimaryWindowDelivery {
+export interface QuotaWindowDelivery {
   deliveryId: number;
   eventId: number;
   bindingId: number;
@@ -375,12 +375,12 @@ export class BindingStore {
     });
   }
 
-  seedCursor(upstreamId: string, observation: PrimaryWindowFacts): SeedCursorResult {
+  seedCursor(upstreamId: string, observation: QuotaWindowFacts): SeedCursorResult {
     validateText(upstreamId, 'upstream id');
     validateFacts(observation);
     return this.immediateTransaction(() => {
       const result = this.db.prepare(`
-        INSERT INTO primary_window_cursor (
+        INSERT INTO quota_window_cursor (
           upstream_id, revision,
           anchor_start_at_ms, anchor_end_at_ms, anchor_duration_ms, anchor_observed_at_ms,
           latest_start_at_ms, latest_end_at_ms, latest_duration_ms, latest_observed_at_ms,
@@ -407,8 +407,8 @@ export class BindingStore {
     });
   }
 
-  getCursor(upstreamId: string): PrimaryWindowCursor | null {
-    const row = this.db.prepare(`SELECT ${CURSOR_COLUMNS} FROM primary_window_cursor WHERE upstream_id = ?`)
+  getCursor(upstreamId: string): QuotaWindowCursor | null {
+    const row = this.db.prepare(`SELECT ${CURSOR_COLUMNS} FROM quota_window_cursor WHERE upstream_id = ?`)
       .get(upstreamId) as CursorRow | undefined;
     return row ? decodeCursor(row) : null;
   }
@@ -416,18 +416,18 @@ export class BindingStore {
   resetCursor(upstreamId: string): boolean {
     validateText(upstreamId, 'upstream id');
     return this.immediateTransaction(() => {
-      this.db.prepare('DELETE FROM primary_window_event WHERE upstream_id = ?').run(upstreamId);
-      return this.db.prepare('DELETE FROM primary_window_cursor WHERE upstream_id = ?').run(upstreamId).changes === 1;
+      this.db.prepare('DELETE FROM quota_window_event WHERE upstream_id = ?').run(upstreamId);
+      return this.db.prepare('DELETE FROM quota_window_cursor WHERE upstream_id = ?').run(upstreamId).changes === 1;
     });
   }
 
-  updateSameObservation(upstreamId: string, expectedRevision: number, observation: PrimaryWindowFacts): CursorMutationResult {
+  updateSameObservation(upstreamId: string, expectedRevision: number, observation: QuotaWindowFacts): CursorMutationResult {
     validateText(upstreamId, 'upstream id');
     assertSafeInteger(expectedRevision, 'cursor revision', 0);
     validateFacts(observation);
     return this.immediateTransaction(() => {
       const result = this.db.prepare(`
-        UPDATE primary_window_cursor SET
+        UPDATE quota_window_cursor SET
           latest_start_at_ms = ?, latest_end_at_ms = ?, latest_duration_ms = ?, latest_observed_at_ms = ?,
           latest_used_percent = ?, latest_quota_bucket_key = ?, latest_active_limit = ?,
           pending_kind = NULL, pending_start_at_ms = NULL, pending_end_at_ms = NULL,
@@ -452,12 +452,12 @@ export class BindingStore {
   stagePendingCandidate(
     upstreamId: string,
     expectedRevision: number,
-    candidate: Omit<PendingPrimaryWindowCandidate, 'observationCount'>,
+    candidate: Omit<PendingQuotaWindowCandidate, 'observationCount'>,
   ): CursorMutationResult {
     validatePendingCandidate({ ...candidate, observationCount: 1 });
     return this.immediateTransaction(() => {
       const result = this.db.prepare(`
-        UPDATE primary_window_cursor SET
+        UPDATE quota_window_cursor SET
           pending_kind = ?, pending_start_at_ms = ?, pending_end_at_ms = ?, pending_duration_ms = ?,
           pending_observed_at_ms = ?, pending_first_seen_at_ms = ?, pending_observation_count = 1
         WHERE upstream_id = ? AND revision = ? AND pending_kind IS NULL
@@ -478,12 +478,12 @@ export class BindingStore {
   replacePendingCandidate(
     upstreamId: string,
     expectedRevision: number,
-    candidate: PendingPrimaryWindowCandidate,
+    candidate: PendingQuotaWindowCandidate,
   ): CursorMutationResult {
     validatePendingCandidate(candidate);
     return this.immediateTransaction(() => {
       const result = this.db.prepare(`
-        UPDATE primary_window_cursor SET
+        UPDATE quota_window_cursor SET
           pending_kind = ?, pending_start_at_ms = ?, pending_end_at_ms = ?, pending_duration_ms = ?,
           pending_observed_at_ms = ?, pending_first_seen_at_ms = ?, pending_observation_count = ?
         WHERE upstream_id = ? AND revision = ?
@@ -505,7 +505,7 @@ export class BindingStore {
   clearPendingCandidate(upstreamId: string, expectedRevision: number): CursorMutationResult {
     return this.immediateTransaction(() => {
       const result = this.db.prepare(`
-        UPDATE primary_window_cursor SET
+        UPDATE quota_window_cursor SET
           pending_kind = NULL, pending_start_at_ms = NULL, pending_end_at_ms = NULL,
           pending_duration_ms = NULL, pending_observed_at_ms = NULL,
           pending_first_seen_at_ms = NULL, pending_observation_count = NULL
@@ -517,7 +517,7 @@ export class BindingStore {
 
   commitTransition(
     expectedRevision: number,
-    event: NewPrimaryWindowEvent,
+    event: NewQuotaWindowEvent,
     eligibleBindingIds: readonly number[],
     candidateFirstSeenAtMs: number,
   ): CommitTransitionResult {
@@ -531,7 +531,7 @@ export class BindingStore {
     for (const bindingId of uniqueBindingIds) assertSafeInteger(bindingId, 'binding id', 1);
 
     return this.immediateTransaction(() => {
-      const cursorRow = this.db.prepare(`SELECT ${CURSOR_COLUMNS} FROM primary_window_cursor WHERE upstream_id = ?`)
+      const cursorRow = this.db.prepare(`SELECT ${CURSOR_COLUMNS} FROM quota_window_cursor WHERE upstream_id = ?`)
         .get(event.upstreamId) as CursorRow | undefined;
       if (!cursorRow) return { status: 'missing' };
       const cursor = decodeCursor(cursorRow);
@@ -546,7 +546,7 @@ export class BindingStore {
       }
 
       const inserted = this.db.prepare(`
-        INSERT INTO primary_window_event (
+        INSERT INTO quota_window_event (
           upstream_id, from_revision, to_revision, upstream_kind, upstream_name, kind,
           previous_start_at_ms, previous_end_at_ms, previous_duration_ms, previous_observed_at_ms,
           previous_used_percent, previous_quota_bucket_key, previous_active_limit,
@@ -555,10 +555,10 @@ export class BindingStore {
           detected_at_ms, effective_previous_usage_end_at_ms
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(...eventSqlValues(event));
-      const eventId = safeRowId(inserted.lastInsertRowid, 'primary_window_event');
+      const eventId = safeRowId(inserted.lastInsertRowid, 'quota_window_event');
 
       const advanced = this.db.prepare(`
-        UPDATE primary_window_cursor SET
+        UPDATE quota_window_cursor SET
           revision = ?,
           anchor_start_at_ms = ?, anchor_end_at_ms = ?, anchor_duration_ms = ?, anchor_observed_at_ms = ?,
           latest_start_at_ms = ?, latest_end_at_ms = ?, latest_duration_ms = ?, latest_observed_at_ms = ?,
@@ -590,7 +590,7 @@ export class BindingStore {
       if (uniqueBindingIds.length > 0) {
         const placeholders = uniqueBindingIds.map(() => '?').join(', ');
         const deliveries = this.db.prepare(`
-          INSERT INTO primary_window_delivery (
+          INSERT INTO quota_window_delivery (
             event_id, binding_id, status, payload, attempts, next_attempt_at_ms,
             claim_token, claim_until_ms, sent_at_ms, dead_at_ms, last_error,
             created_at_ms, updated_at_ms
@@ -615,20 +615,20 @@ export class BindingStore {
     });
   }
 
-  getEvent(eventId: number): PrimaryWindowEvent | null {
-    const row = this.db.prepare(`SELECT ${EVENT_COLUMNS} FROM primary_window_event WHERE id = ?`)
+  getEvent(eventId: number): QuotaWindowEvent | null {
+    const row = this.db.prepare(`SELECT ${EVENT_COLUMNS} FROM quota_window_event WHERE id = ?`)
       .get(eventId) as EventRow | undefined;
     return row ? decodeEvent(row) : null;
   }
 
-  listEvents(upstreamId?: string): PrimaryWindowEvent[] {
+  listEvents(upstreamId?: string): QuotaWindowEvent[] {
     const rows = upstreamId === undefined
-      ? this.db.prepare(`SELECT ${EVENT_COLUMNS} FROM primary_window_event ORDER BY id`).all()
-      : this.db.prepare(`SELECT ${EVENT_COLUMNS} FROM primary_window_event WHERE upstream_id = ? ORDER BY id`).all(upstreamId);
+      ? this.db.prepare(`SELECT ${EVENT_COLUMNS} FROM quota_window_event ORDER BY id`).all()
+      : this.db.prepare(`SELECT ${EVENT_COLUMNS} FROM quota_window_event WHERE upstream_id = ? ORDER BY id`).all(upstreamId);
     return (rows as unknown as EventRow[]).map(decodeEvent);
   }
 
-  claimDueDelivery(input: ClaimDeliveryInput): PrimaryWindowDelivery | null {
+  claimDueDelivery(input: ClaimDeliveryInput): QuotaWindowDelivery | null {
     assertTimestamp(input.nowMs, 'claim timestamp');
     assertSafeInteger(input.leaseDurationMs, 'lease duration', 1);
     const token = input.claimToken ?? randomUUID();
@@ -640,7 +640,7 @@ export class BindingStore {
       for (;;) {
         const row = this.db.prepare(`
           SELECT ${DELIVERY_COLUMNS}
-          FROM primary_window_delivery
+          FROM quota_window_delivery
           WHERE (status = 'pending' AND next_attempt_at_ms <= ?)
              OR (status = 'leased' AND claim_until_ms <= ?)
           ORDER BY
@@ -652,13 +652,13 @@ export class BindingStore {
 
         let deliveryId: number;
         try {
-          deliveryId = requireSafeInteger(row.id, 'primary_window_delivery', safeIdentifier(row.id), 1);
+          deliveryId = requireSafeInteger(row.id, 'quota_window_delivery', safeIdentifier(row.id), 1);
           decodeDelivery(row);
         } catch {
           const malformedId = safeOptionalInteger(row.id);
-          if (malformedId === null) throw new DatabaseRowError('primary_window_delivery', 'unknown');
+          if (malformedId === null) throw new DatabaseRowError('quota_window_delivery', 'unknown');
           this.db.prepare(`
-            UPDATE primary_window_delivery SET
+            UPDATE quota_window_delivery SET
               status = 'dead', claim_token = NULL, claim_until_ms = NULL,
               dead_at_ms = ?, last_error = 'Malformed delivery row', updated_at_ms = ?
             WHERE id = ?
@@ -667,7 +667,7 @@ export class BindingStore {
         }
 
         const claimed = this.db.prepare(`
-          UPDATE primary_window_delivery SET
+          UPDATE quota_window_delivery SET
             status = 'leased', attempts = attempts + 1,
             claim_token = ?, claim_until_ms = ?, updated_at_ms = ?
           WHERE id = ?
@@ -684,7 +684,7 @@ export class BindingStore {
     assertDeliveryMutationInput(deliveryId, claimToken, nowMs);
     validateText(payload, 'delivery payload');
     return this.db.prepare(`
-      UPDATE primary_window_delivery SET payload = ?, updated_at_ms = ?
+      UPDATE quota_window_delivery SET payload = ?, updated_at_ms = ?
       WHERE id = ? AND status = 'leased' AND claim_token = ? AND claim_until_ms > ? AND payload IS NULL
     `).run(payload, nowMs, deliveryId, claimToken, nowMs).changes === 1;
   }
@@ -692,7 +692,7 @@ export class BindingStore {
   markDeliverySent(deliveryId: number, claimToken: string, sentAtMs: number): boolean {
     assertDeliveryMutationInput(deliveryId, claimToken, sentAtMs);
     return this.db.prepare(`
-      UPDATE primary_window_delivery SET
+      UPDATE quota_window_delivery SET
         status = 'sent', claim_token = NULL, claim_until_ms = NULL,
         sent_at_ms = ?, dead_at_ms = NULL, last_error = NULL, updated_at_ms = ?
       WHERE id = ? AND status = 'leased' AND claim_token = ? AND claim_until_ms > ? AND payload IS NOT NULL
@@ -709,7 +709,7 @@ export class BindingStore {
     assertDeliveryMutationInput(deliveryId, claimToken, nowMs);
     assertTimestamp(nextAttemptAtMs, 'next-attempt timestamp');
     return this.db.prepare(`
-      UPDATE primary_window_delivery SET
+      UPDATE quota_window_delivery SET
         status = 'pending', next_attempt_at_ms = ?, claim_token = NULL, claim_until_ms = NULL,
         last_error = ?, updated_at_ms = ?
       WHERE id = ? AND status = 'leased' AND claim_token = ? AND claim_until_ms > ?
@@ -724,7 +724,7 @@ export class BindingStore {
   ): boolean {
     assertDeliveryMutationInput(deliveryId, claimToken, nowMs);
     return this.db.prepare(`
-      UPDATE primary_window_delivery SET
+      UPDATE quota_window_delivery SET
         status = 'skipped', claim_token = NULL, claim_until_ms = NULL,
         last_error = ?, updated_at_ms = ?
       WHERE id = ? AND status = 'leased' AND claim_token = ? AND claim_until_ms > ?
@@ -739,23 +739,23 @@ export class BindingStore {
   ): boolean {
     assertDeliveryMutationInput(deliveryId, claimToken, deadAtMs);
     return this.db.prepare(`
-      UPDATE primary_window_delivery SET
+      UPDATE quota_window_delivery SET
         status = 'dead', claim_token = NULL, claim_until_ms = NULL,
         dead_at_ms = ?, last_error = ?, updated_at_ms = ?
       WHERE id = ? AND status = 'leased' AND claim_token = ? AND claim_until_ms > ?
     `).run(deadAtMs, boundedError(lastError), deadAtMs, deliveryId, claimToken, deadAtMs).changes === 1;
   }
 
-  getDelivery(deliveryId: number): PrimaryWindowDelivery | null {
-    const row = this.db.prepare(`SELECT ${DELIVERY_COLUMNS} FROM primary_window_delivery WHERE id = ?`)
+  getDelivery(deliveryId: number): QuotaWindowDelivery | null {
+    const row = this.db.prepare(`SELECT ${DELIVERY_COLUMNS} FROM quota_window_delivery WHERE id = ?`)
       .get(deliveryId) as DeliveryRow | undefined;
     return row ? decodeDelivery(row) : null;
   }
 
-  listDeliveries(eventId?: number): PrimaryWindowDelivery[] {
+  listDeliveries(eventId?: number): QuotaWindowDelivery[] {
     const rows = eventId === undefined
-      ? this.db.prepare(`SELECT ${DELIVERY_COLUMNS} FROM primary_window_delivery ORDER BY id`).all()
-      : this.db.prepare(`SELECT ${DELIVERY_COLUMNS} FROM primary_window_delivery WHERE event_id = ? ORDER BY id`).all(eventId);
+      ? this.db.prepare(`SELECT ${DELIVERY_COLUMNS} FROM quota_window_delivery ORDER BY id`).all()
+      : this.db.prepare(`SELECT ${DELIVERY_COLUMNS} FROM quota_window_delivery WHERE event_id = ? ORDER BY id`).all(eventId);
     return (rows as unknown as DeliveryRow[]).map(decodeDelivery);
   }
 
@@ -764,13 +764,13 @@ export class BindingStore {
     assertSafeInteger(limit, 'purge limit', 1);
     const boundedLimit = Math.min(limit, MAX_PURGE_BATCH_SIZE);
     return this.immediateTransaction(() => Number(this.db.prepare(`
-      DELETE FROM primary_window_event
+      DELETE FROM quota_window_event
       WHERE id IN (
         SELECT event.id
-        FROM primary_window_event AS event
+        FROM quota_window_event AS event
         WHERE event.detected_at_ms < ?
           AND NOT EXISTS (
-            SELECT 1 FROM primary_window_delivery AS delivery
+            SELECT 1 FROM quota_window_delivery AS delivery
             WHERE delivery.event_id = event.id
               AND delivery.status NOT IN ('sent', 'skipped', 'dead')
           )
@@ -866,12 +866,12 @@ export class BindingStore {
   }
 }
 
-const decodeCursor = (row: CursorRow): PrimaryWindowCursor => {
+const decodeCursor = (row: CursorRow): QuotaWindowCursor => {
   const identifier = typeof row.upstream_id === 'string' ? row.upstream_id : 'unknown';
-  const table = 'primary_window_cursor' as const;
+  const table = 'quota_window_cursor' as const;
   const upstreamId = requireText(row.upstream_id, table, identifier);
   const anchor = decodeAnchor(row, 'anchor', table, identifier);
-  const latest: PrimaryWindowFacts = {
+  const latest: QuotaWindowFacts = {
     ...decodeAnchor(row, 'latest', table, identifier),
     usedPercent: requireNullablePercent(row.latest_used_percent, table, identifier),
     quotaBucketKey: requireNullableText(row.latest_quota_bucket_key, table, identifier),
@@ -886,7 +886,7 @@ const decodeCursor = (row: CursorRow): PrimaryWindowCursor => {
     row.pending_first_seen_at_ms,
     row.pending_observation_count,
   ];
-  let pending: PendingPrimaryWindowCandidate | null = null;
+  let pending: PendingQuotaWindowCandidate | null = null;
   if (!pendingValues.every(value => value === null)) {
     if (pendingValues.some(value => value === null)
       || (row.pending_kind !== 'natural' && row.pending_kind !== 'manual')) {
@@ -915,9 +915,9 @@ const decodeCursor = (row: CursorRow): PrimaryWindowCursor => {
 const decodeAnchor = (
   row: CursorRow,
   prefix: 'anchor' | 'latest',
-  table: 'primary_window_cursor',
+  table: 'quota_window_cursor',
   identifier: string,
-): PrimaryWindowAnchor => {
+): QuotaWindowAnchor => {
   const anchor = {
     startAtMs: requireTimestamp(row[`${prefix}_start_at_ms`], table, identifier),
     endAtMs: requireTimestamp(row[`${prefix}_end_at_ms`], table, identifier),
@@ -928,8 +928,8 @@ const decodeAnchor = (
   return anchor;
 };
 
-const decodeEvent = (row: EventRow): PrimaryWindowEvent => {
-  const table = 'primary_window_event' as const;
+const decodeEvent = (row: EventRow): QuotaWindowEvent => {
+  const table = 'quota_window_event' as const;
   const identifier = safeIdentifier(row.id);
   if (row.kind !== 'natural' && row.kind !== 'manual') throw new DatabaseRowError(table, identifier);
   const previous = decodeEventFacts(row, 'previous', identifier);
@@ -957,9 +957,9 @@ const decodeEvent = (row: EventRow): PrimaryWindowEvent => {
   };
 };
 
-const decodeEventFacts = (row: EventRow, prefix: 'previous' | 'current', identifier: string): PrimaryWindowFacts => {
-  const table = 'primary_window_event' as const;
-  const facts: PrimaryWindowFacts = {
+const decodeEventFacts = (row: EventRow, prefix: 'previous' | 'current', identifier: string): QuotaWindowFacts => {
+  const table = 'quota_window_event' as const;
+  const facts: QuotaWindowFacts = {
     startAtMs: requireTimestamp(row[`${prefix}_start_at_ms`], table, identifier),
     endAtMs: requireTimestamp(row[`${prefix}_end_at_ms`], table, identifier),
     durationMs: requireSafeInteger(row[`${prefix}_duration_ms`], table, identifier, 1),
@@ -972,8 +972,8 @@ const decodeEventFacts = (row: EventRow, prefix: 'previous' | 'current', identif
   return facts;
 };
 
-const decodeDelivery = (row: DeliveryRow): PrimaryWindowDelivery => {
-  const table = 'primary_window_delivery' as const;
+const decodeDelivery = (row: DeliveryRow): QuotaWindowDelivery => {
+  const table = 'quota_window_delivery' as const;
   const identifier = safeIdentifier(row.id);
   if (!isDeliveryStatus(row.status)) throw new DatabaseRowError(table, identifier);
   const payload = requireNullableText(row.payload, table, identifier);
@@ -1012,7 +1012,7 @@ const decodeDelivery = (row: DeliveryRow): PrimaryWindowDelivery => {
   };
 };
 
-const factsExactlyEqual = (left: PrimaryWindowFacts, right: PrimaryWindowFacts): boolean =>
+const factsExactlyEqual = (left: QuotaWindowFacts, right: QuotaWindowFacts): boolean =>
   left.startAtMs === right.startAtMs
   && left.endAtMs === right.endAtMs
   && left.durationMs === right.durationMs
@@ -1022,14 +1022,14 @@ const factsExactlyEqual = (left: PrimaryWindowFacts, right: PrimaryWindowFacts):
   && left.activeLimit === right.activeLimit;
 
 const eventMatchesPendingCandidate = (
-  currentFacts: PrimaryWindowFacts,
-  pending: PendingPrimaryWindowCandidate,
+  currentFacts: QuotaWindowFacts,
+  pending: PendingQuotaWindowCandidate,
 ): boolean => currentFacts.startAtMs === pending.startAtMs
   && currentFacts.endAtMs === pending.endAtMs
   && currentFacts.durationMs === pending.durationMs
   && currentFacts.observedAtMs === pending.observedAtMs;
 
-const eventSqlValues = (event: NewPrimaryWindowEvent): SQLInputValue[] => [
+const eventSqlValues = (event: NewQuotaWindowEvent): SQLInputValue[] => [
   event.upstreamId,
   event.fromRevision,
   event.toRevision,
@@ -1042,7 +1042,7 @@ const eventSqlValues = (event: NewPrimaryWindowEvent): SQLInputValue[] => [
   event.effectivePreviousUsageEndAtMs,
 ];
 
-const factsSqlValues = (facts: PrimaryWindowFacts): SQLInputValue[] => [
+const factsSqlValues = (facts: QuotaWindowFacts): SQLInputValue[] => [
   facts.startAtMs,
   facts.endAtMs,
   facts.durationMs,
@@ -1061,7 +1061,7 @@ const validateBindingInput = (input: { telegramUserId: string; flowayUserId: num
 
 const validateUsername = (username: string): void => validateText(username, 'Floway username');
 
-const validateFacts = (facts: PrimaryWindowFacts): void => {
+const validateFacts = (facts: QuotaWindowFacts): void => {
   validateWindow(facts);
   if (facts.usedPercent !== null
     && (typeof facts.usedPercent !== 'number' || !Number.isFinite(facts.usedPercent)
@@ -1072,14 +1072,14 @@ const validateFacts = (facts: PrimaryWindowFacts): void => {
   validateNullableText(facts.activeLimit, 'active limit');
 };
 
-const validatePendingCandidate = (candidate: PendingPrimaryWindowCandidate): void => {
+const validatePendingCandidate = (candidate: PendingQuotaWindowCandidate): void => {
   if (candidate.kind !== 'natural' && candidate.kind !== 'manual') throw new TypeError('Invalid transition kind');
   validateWindow(candidate);
   assertTimestamp(candidate.firstSeenAtMs, 'candidate first-seen timestamp');
   assertSafeInteger(candidate.observationCount, 'candidate observation count', 1);
 };
 
-const validateEvent = (event: NewPrimaryWindowEvent): void => {
+const validateEvent = (event: NewQuotaWindowEvent): void => {
   validateText(event.upstreamId, 'upstream id');
   assertSafeInteger(event.fromRevision, 'event from revision', 0);
   assertSafeInteger(event.toRevision, 'event to revision', 1);
@@ -1103,7 +1103,7 @@ const validateEvent = (event: NewPrimaryWindowEvent): void => {
   }
 };
 
-const validateWindow = (window: PrimaryWindowAnchor): void => {
+const validateWindow = (window: QuotaWindowAnchor): void => {
   assertTimestamp(window.startAtMs, 'window start');
   assertTimestamp(window.endAtMs, 'window end');
   assertSafeInteger(window.durationMs, 'window duration', 1);
@@ -1114,8 +1114,8 @@ const validateWindow = (window: PrimaryWindowAnchor): void => {
 };
 
 const validateDecodedWindow = (
-  window: PrimaryWindowAnchor,
-  table: 'primary_window_cursor' | 'primary_window_event',
+  window: QuotaWindowAnchor,
+  table: 'quota_window_cursor' | 'quota_window_event',
   identifier: string,
 ): void => {
   if (window.endAtMs <= window.startAtMs || window.durationMs !== window.endAtMs - window.startAtMs) {

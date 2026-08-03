@@ -1,4 +1,4 @@
-import type { PrimaryWindowEvent } from './db.js';
+import type { QuotaWindowEvent } from './db.js';
 import type {
   ApiKeyRecord,
   Binding,
@@ -168,7 +168,7 @@ export const formatUpstreamList = (upstreams: readonly UpstreamRecord[]): string
   return [blockTitle(`Floway upstreams (${upstreams.length})`), ...rows].join('\n\n');
 };
 
-export const formatUpstreamSelectionRequired = (command: 'upstream' | 'usage' | 'quota' | 'quota verbose' | 'test_primary_window', upstreams: readonly UpstreamRecord[]): string => {
+export const formatUpstreamSelectionRequired = (command: 'upstream' | 'usage' | 'quota' | 'quota verbose' | 'test_quota_window', upstreams: readonly UpstreamRecord[]): string => {
   if (upstreams.length === 0) return blockTitle('No upstreams found.');
   return [
     blockTitle('Choose an upstream'),
@@ -280,7 +280,7 @@ export const formatUsageReports = (upstream: UpstreamRecord, reports: readonly U
   return lines.join('\n');
 };
 
-export const formatPrimaryWindowNotification = (
+export const formatQuotaWindowNotification = (
   upstream: UpstreamRecord,
   report: UsageWindowReport,
   quotaEstimate: string,
@@ -305,9 +305,9 @@ export const formatPrimaryWindowNotification = (
   return lines.join('\n');
 };
 
-export const formatPrimaryWindowEventNotification = (
+export const formatQuotaWindowEventNotification = (
   upstream: UpstreamRecord,
-  event: PrimaryWindowEvent,
+  event: QuotaWindowEvent,
   report: UsageWindowReport | null,
   quotaEstimate: string,
 ): string => {

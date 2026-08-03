@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   BOT_COMMANDS,
   createBot,
-  TEST_PRIMARY_WINDOW_COMMAND,
+  TEST_QUOTA_WINDOW_COMMAND,
   canShareUpstreamQuota,
   filterUpstreamsForUser,
   parseLeaderboardArgs,
@@ -41,7 +41,7 @@ const upstream = (id: string): UpstreamRecord => ({
 
 describe('bot commands', () => {
   it('keeps the primary window test command hidden from the Telegram command list', () => {
-    expect(BOT_COMMANDS.map(command => command.command)).not.toContain(TEST_PRIMARY_WINDOW_COMMAND);
+    expect(BOT_COMMANDS.map(command => command.command)).not.toContain(TEST_QUOTA_WINDOW_COMMAND);
   });
 
   it('loads the full record before invoking the unified upstream model action', async () => {
@@ -72,7 +72,7 @@ describe('bot commands', () => {
       botDbPath: join(dir, 'bot.sqlite'),
       botSecretKey: randomBytes(32),
       usageExportCacheTtlSeconds: 30,
-      primaryWindowNotifyIntervalSeconds: 300,
+      quotaWindowNotifyIntervalSeconds: 300,
     } satisfies AppConfig;
     store.replaceBinding({
       telegramUserId: '42',
@@ -318,7 +318,7 @@ const createCommandFixture = (): CommandFixture => {
       botDbPath: dbPath,
       botSecretKey: randomBytes(32),
       usageExportCacheTtlSeconds: 30,
-      primaryWindowNotifyIntervalSeconds: 300,
+      quotaWindowNotifyIntervalSeconds: 300,
     },
     close() {
       store.close();

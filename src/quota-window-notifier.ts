@@ -1,24 +1,24 @@
 import {
   BindingStore,
   DatabaseRowError,
-  type NewPrimaryWindowEvent,
-  type PendingPrimaryWindowCandidate,
-  type PrimaryWindowCursor,
-  type PrimaryWindowDelivery,
-  type PrimaryWindowEvent,
-  type PrimaryWindowFacts,
+  type NewQuotaWindowEvent,
+  type PendingQuotaWindowCandidate,
+  type QuotaWindowCursor,
+  type QuotaWindowDelivery,
+  type QuotaWindowEvent,
+  type QuotaWindowFacts,
 } from './db.js';
 import { FlowayHttpError } from './floway-client.js';
 import {
-  formatPrimaryWindowEventNotification,
+  formatQuotaWindowEventNotification,
   formatQuotaEstimateNotification,
 } from './format.js';
 import {
-  classifyPrimaryQuotaTransition,
-  matchesPrimaryQuotaCandidate,
-  PRIMARY_QUOTA_ACTIVE_LIMIT,
-  resolvePrimaryQuotaObservation,
-  type PrimaryQuotaObservation,
+  classifyQuotaWindowTransition,
+  matchesQuotaWindowCandidate,
+  CODEX_PREMIUM_ACTIVE_LIMIT,
+  resolveQuotaWindowObservation,
+  type QuotaWindowObservation,
 } from './quota-window.js';
 import {
   canShareUpstreamQuota,
@@ -35,7 +35,7 @@ import type {
   UpstreamRecord,
 } from './types.js';
 
-interface PrimaryWindowFlowayClient {
+interface QuotaWindowFlowayClient {
   listUpstreams(): Promise<UpstreamRecord[]>;
   listUsers(): Promise<FlowayAdminUser[]>;
   getMe(session: string): Promise<AuthMeResponse>;
@@ -48,9 +48,9 @@ interface TelegramSender {
   };
 }
 
-interface PrimaryWindowNotifierOptions {
+interface QuotaWindowNotifierOptions {
   store: BindingStore;
-  floway: PrimaryWindowFlowayClient;
+  floway: QuotaWindowFlowayClient;
   bot: TelegramSender;
   intervalSeconds: number;
 }
@@ -73,11 +73,11 @@ const TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const MAX_DELIVERIES_PER_POLL = 100;
 const CLOCK_SKEW_MS = 5 * 60_000;
 
-export class PrimaryWindowNotifier {
+export class QuotaWindowNotifier {
   private timer: ReturnType<typeof setInterval> | null = null;
   private activePoll: Promise<void> | null = null;
 
-  constructor(private readonly options: PrimaryWindowNotifierOptions) {}
+  constructor(private readonly options: QuotaWindowNotifierOptions) {}
 
   start(): void {
     if (this.timer) return;
@@ -116,17 +116,17 @@ export class PrimaryWindowNotifier {
     try {
       await this.observeProviderWindows(nowMs);
     } catch (error) {
-      console.error('Primary window observation failed:', error);
+      console.error('Quota window observation failed:', error);
     }
     try {
       await this.dispatchDeliveries(nowMs);
     } catch (error) {
-      console.error('Primary window delivery dispatch failed:', error);
+      console.error('Quota window delivery dispatch failed:', error);
     }
     try {
       this.options.store.purgeTerminalEvents(Math.max(0, nowMs - TERMINAL_RETENTION_MS));
     } catch (error) {
-      console.error('Primary window delivery retention failed:', error);
+      console.error('Quota window delivery retention failed:', error);
     }
   }
 
@@ -135,11 +135,11 @@ export class PrimaryWindowNotifier {
     const refreshedBindings = await this.refreshBindings();
 
     for (const upstream of upstreams) {
-      const resolution = resolvePrimaryQuotaObservation(upstream);
+      const resolution = resolveQuotaWindowObservation(upstream);
       if (resolution.status !== 'valid') {
         this.clearUnconfirmedCandidate(upstream.id);
         if (resolution.status === 'malformed' || resolution.status === 'ambiguous') {
-          console.warn(`Ignored ${resolution.status} primary quota observation for upstream ${upstream.id}`);
+          console.warn(`Ignored ${resolution.status} quota observation for upstream ${upstream.id}`);
         }
         continue;
       }
@@ -155,13 +155,13 @@ export class PrimaryWindowNotifier {
       try {
         this.applyObservation(upstream, resolution.observation, eligibleBindingIds, nowMs);
       } catch (error) {
-        if (error instanceof DatabaseRowError && error.table === 'primary_window_cursor') {
-          console.error(`Reset corrupt primary window cursor for upstream ${upstream.id}:`, error);
+        if (error instanceof DatabaseRowError && error.table === 'quota_window_cursor') {
+          console.error(`Reset corrupt quota window cursor for upstream ${upstream.id}:`, error);
           this.options.store.resetCursor(upstream.id);
           this.options.store.seedCursor(upstream.id, observationFacts(resolution.observation));
           continue;
         }
-        console.error(`Failed to apply primary quota observation for upstream ${upstream.id}:`, error);
+        console.error(`Failed to apply quota observation for upstream ${upstream.id}:`, error);
       }
     }
   }
@@ -208,12 +208,12 @@ export class PrimaryWindowNotifier {
 
   private applyObservation(
     upstream: UpstreamRecord,
-    observation: PrimaryQuotaObservation,
+    observation: QuotaWindowObservation,
     eligibleBindingIds: readonly number[],
     nowMs: number,
   ): void {
     if (observation.observedAtMs > nowMs + CLOCK_SKEW_MS) {
-      console.warn(`Ignored future primary quota observation for upstream ${upstream.id}`);
+      console.warn(`Ignored future quota observation for upstream ${upstream.id}`);
       this.clearUnconfirmedCandidate(upstream.id);
       return;
     }
@@ -225,7 +225,7 @@ export class PrimaryWindowNotifier {
     }
 
     const anchor = cursorObservation(cursor, observation.bucketKey);
-    const classification = classifyPrimaryQuotaTransition(anchor, observation);
+    const classification = classifyQuotaWindowTransition(anchor, observation);
     if (classification === 'same') {
       this.options.store.updateSameObservation(upstream.id, cursor.revision, observationFacts(observation));
       return;
@@ -242,7 +242,7 @@ export class PrimaryWindowNotifier {
 
     const pendingObservationValue = pendingObservation(cursor, observation);
     if (cursor.pending.kind !== classification
-      || !matchesPrimaryQuotaCandidate(pendingObservationValue, observation)) {
+      || !matchesQuotaWindowCandidate(pendingObservationValue, observation)) {
       this.options.store.replacePendingCandidate(upstream.id, cursor.revision, {
         ...pendingCandidate(classification, observation, nowMs),
         observationCount: 1,
@@ -251,7 +251,7 @@ export class PrimaryWindowNotifier {
     }
     if (observation.startMs > nowMs) return;
 
-    const confirmedPending: PendingPrimaryWindowCandidate = {
+    const confirmedPending: PendingQuotaWindowCandidate = {
       kind: cursor.pending.kind,
       startAtMs: observation.startMs,
       endAtMs: observation.endMs,
@@ -263,7 +263,7 @@ export class PrimaryWindowNotifier {
     const replaced = this.options.store.replacePendingCandidate(upstream.id, cursor.revision, confirmedPending);
     if (replaced.status !== 'updated') return;
 
-    const event: NewPrimaryWindowEvent = {
+    const event: NewQuotaWindowEvent = {
       upstreamId: upstream.id,
       fromRevision: cursor.revision,
       toRevision: cursor.revision + 1,
@@ -291,7 +291,7 @@ export class PrimaryWindowNotifier {
       const cursor = this.options.store.getCursor(upstreamId);
       if (cursor?.pending) this.options.store.clearPendingCandidate(upstreamId, cursor.revision);
     } catch (error) {
-      console.error(`Failed to clear primary window candidate for upstream ${upstreamId}:`, error);
+      console.error(`Failed to clear quota window candidate for upstream ${upstreamId}:`, error);
     }
   }
 
@@ -306,7 +306,7 @@ export class PrimaryWindowNotifier {
     }
   }
 
-  private async dispatchDelivery(delivery: PrimaryWindowDelivery, nowMs: number): Promise<void> {
+  private async dispatchDelivery(delivery: QuotaWindowDelivery, nowMs: number): Promise<void> {
     const claimToken = delivery.claimToken;
     if (!claimToken) return;
     try {
@@ -356,7 +356,7 @@ export class PrimaryWindowNotifier {
   }
 
   private async renderDelivery(
-    event: PrimaryWindowEvent,
+    event: QuotaWindowEvent,
     binding: Binding,
     upstream: UpstreamRecord,
   ): Promise<string> {
@@ -377,10 +377,10 @@ export class PrimaryWindowNotifier {
           snapshot,
           users.filter(user => canShareUpstreamQuota(user, upstream.id)).length,
         ));
-      return formatPrimaryWindowEventNotification(upstream, event, report, quotaEstimate);
+      return formatQuotaWindowEventNotification(upstream, event, report, quotaEstimate);
     } catch (error) {
-      console.error(`Primary window delivery enrichment failed for event ${event.eventId}:`, error);
-      return formatPrimaryWindowEventNotification(
+      console.error(`Quota window delivery enrichment failed for event ${event.eventId}:`, error);
+      return formatQuotaWindowEventNotification(
         upstream,
         event,
         null,
@@ -390,7 +390,7 @@ export class PrimaryWindowNotifier {
   }
 }
 
-const eventUpstream = (event: PrimaryWindowEvent): UpstreamRecord => ({
+const eventUpstream = (event: QuotaWindowEvent): UpstreamRecord => ({
   id: event.upstreamId,
   kind: event.upstreamKind,
   name: event.upstreamName,
@@ -408,7 +408,7 @@ const eventUpstream = (event: PrimaryWindowEvent): UpstreamRecord => ({
   state: null,
 });
 
-const observationFacts = (observation: PrimaryQuotaObservation): PrimaryWindowFacts => ({
+const observationFacts = (observation: QuotaWindowObservation): QuotaWindowFacts => ({
   startAtMs: observation.startMs,
   endAtMs: observation.endMs,
   durationMs: observation.durationMs,
@@ -418,10 +418,10 @@ const observationFacts = (observation: PrimaryQuotaObservation): PrimaryWindowFa
   activeLimit: observation.activeLimit,
 });
 
-const cursorObservation = (cursor: PrimaryWindowCursor, fallbackBucketKey: string): PrimaryQuotaObservation => ({
+const cursorObservation = (cursor: QuotaWindowCursor, fallbackBucketKey: string): QuotaWindowObservation => ({
   upstreamId: cursor.upstreamId,
   bucketKey: cursor.latest.quotaBucketKey ?? fallbackBucketKey,
-  activeLimit: PRIMARY_QUOTA_ACTIVE_LIMIT,
+  activeLimit: CODEX_PREMIUM_ACTIVE_LIMIT,
   observedAt: new Date(cursor.latest.observedAtMs).toISOString(),
   observedAtMs: cursor.latest.observedAtMs,
   startAt: new Date(cursor.anchor.startAtMs).toISOString(),
@@ -434,9 +434,9 @@ const cursorObservation = (cursor: PrimaryWindowCursor, fallbackBucketKey: strin
 
 const pendingCandidate = (
   kind: 'natural' | 'manual',
-  observation: PrimaryQuotaObservation,
+  observation: QuotaWindowObservation,
   firstSeenAtMs: number,
-): Omit<PendingPrimaryWindowCandidate, 'observationCount'> => ({
+): Omit<PendingQuotaWindowCandidate, 'observationCount'> => ({
   kind,
   startAtMs: observation.startMs,
   endAtMs: observation.endMs,
@@ -446,14 +446,14 @@ const pendingCandidate = (
 });
 
 const pendingObservation = (
-  cursor: PrimaryWindowCursor,
-  current: PrimaryQuotaObservation,
-): PrimaryQuotaObservation => {
+  cursor: QuotaWindowCursor,
+  current: QuotaWindowObservation,
+): QuotaWindowObservation => {
   const pending = cursor.pending!;
   return {
     upstreamId: cursor.upstreamId,
     bucketKey: current.bucketKey,
-    activeLimit: PRIMARY_QUOTA_ACTIVE_LIMIT,
+    activeLimit: CODEX_PREMIUM_ACTIVE_LIMIT,
     observedAt: new Date(pending.observedAtMs).toISOString(),
     observedAtMs: pending.observedAtMs,
     startAt: new Date(pending.startAtMs).toISOString(),
@@ -465,12 +465,12 @@ const pendingObservation = (
   };
 };
 
-const eventPreviousUsageWindow = (event: PrimaryWindowEvent): UsageWindow => {
+const eventPreviousUsageWindow = (event: QuotaWindowEvent): UsageWindow => {
   const endAtMs = event.effectivePreviousUsageEndAtMs ?? event.previous.endAtMs;
   const start = new Date(event.previous.startAtMs);
   const end = new Date(endAtMs);
   return {
-    label: 'Primary window',
+    label: 'Quota window',
     startAt: start.toISOString(),
     endAt: end.toISOString(),
     startHour: hourString(start),

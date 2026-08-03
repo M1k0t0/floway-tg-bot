@@ -10,8 +10,8 @@ import {
   BindingStore,
   DatabaseRowError,
   MAX_DELIVERY_ERROR_LENGTH,
-  type NewPrimaryWindowEvent,
-  type PrimaryWindowFacts,
+  type NewQuotaWindowEvent,
+  type QuotaWindowFacts,
 } from '../src/db.js';
 
 const tempDirs: string[] = [];
@@ -20,7 +20,7 @@ const stores: BindingStore[] = [];
 const DAY = 24 * 60 * 60 * 1_000;
 const OBSERVED = Date.UTC(2026, 5, 1);
 
-const previous: PrimaryWindowFacts = {
+const previous: QuotaWindowFacts = {
   startAtMs: OBSERVED,
   endAtMs: OBSERVED + 7 * DAY,
   durationMs: 7 * DAY,
@@ -30,7 +30,7 @@ const previous: PrimaryWindowFacts = {
   activeLimit: 'seven-day',
 };
 
-const current: PrimaryWindowFacts = {
+const current: QuotaWindowFacts = {
   startAtMs: OBSERVED + 7 * DAY,
   endAtMs: OBSERVED + 14 * DAY,
   durationMs: 7 * DAY,
@@ -40,7 +40,7 @@ const current: PrimaryWindowFacts = {
   activeLimit: 'seven-day',
 };
 
-const transition = (overrides: Partial<NewPrimaryWindowEvent> = {}): NewPrimaryWindowEvent => ({
+const transition = (overrides: Partial<NewQuotaWindowEvent> = {}): NewQuotaWindowEvent => ({
   upstreamId: 'up_a',
   fromRevision: 0,
   toRevision: 1,
@@ -169,7 +169,7 @@ describe('BindingStore cursor and transition transactions', () => {
   });
 
   it('rejects transition facts that do not exactly match the persisted cursor candidate', () => {
-    const mismatches: NewPrimaryWindowEvent[] = [
+    const mismatches: NewQuotaWindowEvent[] = [
       transition({ previous: { ...previous, usedPercent: 72 } }),
       transition({
         kind: 'manual',

@@ -13,15 +13,15 @@ const LEGACY_BINDING_COLUMNS: readonly ColumnSignature[] = [
   { name: 'updated_at', type: 'TEXT', notnull: 1, pk: 0 },
 ];
 
-const TABLE_NAMES = ['bindings', 'primary_window_cursor', 'primary_window_event', 'primary_window_delivery'] as const;
+const TABLE_NAMES = ['bindings', 'quota_window_cursor', 'quota_window_event', 'quota_window_delivery'] as const;
 const SCHEMA_OBJECT_NAMES = [
   ...TABLE_NAMES,
-  'primary_window_delivery_claim_idx',
-  'primary_window_delivery_lease_idx',
-  'primary_window_delivery_claim_token_idx',
-  'primary_window_delivery_event_fk_idx',
-  'primary_window_delivery_binding_fk_idx',
-  'primary_window_event_retention_idx',
+  'quota_window_delivery_claim_idx',
+  'quota_window_delivery_lease_idx',
+  'quota_window_delivery_claim_token_idx',
+  'quota_window_delivery_event_fk_idx',
+  'quota_window_delivery_binding_fk_idx',
+  'quota_window_event_retention_idx',
 ] as const;
 const TEMPORARY_BINDINGS_TABLE = '__bindings_v0_migration';
 
@@ -103,9 +103,9 @@ export function verifyVersionOneSchema(db: DatabaseSync): void {
   if (db.prepare('PRAGMA foreign_key_check').all().length > 0) {
     throw new Error('Database contains foreign-key violations');
   }
-  const deliveryForeignKeys = db.prepare('PRAGMA foreign_key_list(primary_window_delivery)').all() as unknown as Array<{ table: unknown; on_delete: unknown }>;
+  const deliveryForeignKeys = db.prepare('PRAGMA foreign_key_list(quota_window_delivery)').all() as unknown as Array<{ table: unknown; on_delete: unknown }>;
   if (!deliveryForeignKeys.some(row => row.table === 'bindings' && row.on_delete === 'CASCADE')
-    || !deliveryForeignKeys.some(row => row.table === 'primary_window_event' && row.on_delete === 'CASCADE')) {
+    || !deliveryForeignKeys.some(row => row.table === 'quota_window_event' && row.on_delete === 'CASCADE')) {
     throw new Error('Delivery foreign keys do not match the current schema');
   }
   if (schemaManifest(db) !== expectedVersionOneSchemaManifest()) {
@@ -159,7 +159,7 @@ const createVersionOneSchema = (db: DatabaseSync): void => {
       updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= bound_at_ms AND updated_at_ms <= ${MAX_TIMESTAMP_MS})
     ) STRICT;
 
-    CREATE TABLE primary_window_cursor (
+    CREATE TABLE quota_window_cursor (
       upstream_id TEXT PRIMARY KEY CHECK (length(upstream_id) > 0),
       revision INTEGER NOT NULL CHECK (revision >= 0 AND revision <= 9007199254740991),
       anchor_start_at_ms INTEGER NOT NULL,
@@ -203,7 +203,7 @@ const createVersionOneSchema = (db: DatabaseSync): void => {
       )
     ) STRICT;
 
-    CREATE TABLE primary_window_event (
+    CREATE TABLE quota_window_event (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       upstream_id TEXT NOT NULL,
       from_revision INTEGER NOT NULL CHECK (from_revision >= 0 AND from_revision <= 9007199254740990),
@@ -228,7 +228,7 @@ const createVersionOneSchema = (db: DatabaseSync): void => {
       detected_at_ms INTEGER NOT NULL CHECK (detected_at_ms >= 0 AND detected_at_ms <= ${MAX_TIMESTAMP_MS}),
       effective_previous_usage_end_at_ms INTEGER,
       UNIQUE (upstream_id, to_revision),
-      FOREIGN KEY (upstream_id) REFERENCES primary_window_cursor(upstream_id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+      FOREIGN KEY (upstream_id) REFERENCES quota_window_cursor(upstream_id) ON UPDATE RESTRICT ON DELETE RESTRICT,
       CHECK (${windowCheckSql('previous')}),
       CHECK (${windowCheckSql('current')}),
       CHECK (previous_used_percent IS NULL OR (previous_used_percent >= 0 AND previous_used_percent <= 100)),
@@ -246,9 +246,9 @@ const createVersionOneSchema = (db: DatabaseSync): void => {
       )
     ) STRICT;
 
-    CREATE TABLE primary_window_delivery (
+    CREATE TABLE quota_window_delivery (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      event_id INTEGER NOT NULL REFERENCES primary_window_event(id) ON UPDATE RESTRICT ON DELETE CASCADE,
+      event_id INTEGER NOT NULL REFERENCES quota_window_event(id) ON UPDATE RESTRICT ON DELETE CASCADE,
       binding_id INTEGER NOT NULL REFERENCES bindings(id) ON UPDATE RESTRICT ON DELETE CASCADE,
       status TEXT NOT NULL CHECK (status IN ('pending', 'leased', 'sent', 'skipped', 'dead')),
       payload TEXT CHECK (payload IS NULL OR length(payload) > 0),
@@ -280,18 +280,18 @@ const createVersionOneSchema = (db: DatabaseSync): void => {
       )
     ) STRICT;
 
-    CREATE INDEX primary_window_delivery_claim_idx
-      ON primary_window_delivery(status, next_attempt_at_ms, id);
-    CREATE INDEX primary_window_delivery_lease_idx
-      ON primary_window_delivery(status, claim_until_ms, id);
-    CREATE UNIQUE INDEX primary_window_delivery_claim_token_idx
-      ON primary_window_delivery(claim_token) WHERE claim_token IS NOT NULL;
-    CREATE INDEX primary_window_delivery_event_fk_idx
-      ON primary_window_delivery(event_id);
-    CREATE INDEX primary_window_delivery_binding_fk_idx
-      ON primary_window_delivery(binding_id);
-    CREATE INDEX primary_window_event_retention_idx
-      ON primary_window_event(detected_at_ms, id);
+    CREATE INDEX quota_window_delivery_claim_idx
+      ON quota_window_delivery(status, next_attempt_at_ms, id);
+    CREATE INDEX quota_window_delivery_lease_idx
+      ON quota_window_delivery(status, claim_until_ms, id);
+    CREATE UNIQUE INDEX quota_window_delivery_claim_token_idx
+      ON quota_window_delivery(claim_token) WHERE claim_token IS NOT NULL;
+    CREATE INDEX quota_window_delivery_event_fk_idx
+      ON quota_window_delivery(event_id);
+    CREATE INDEX quota_window_delivery_binding_fk_idx
+      ON quota_window_delivery(binding_id);
+    CREATE INDEX quota_window_event_retention_idx
+      ON quota_window_event(detected_at_ms, id);
   `);
 };
 

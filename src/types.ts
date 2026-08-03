@@ -5,7 +5,7 @@ export interface AppConfig {
   botDbPath: string;
   botSecretKey: Buffer;
   usageExportCacheTtlSeconds: number;
-  primaryWindowNotifyIntervalSeconds: number;
+  quotaWindowNotifyIntervalSeconds: number;
 }
 
 export interface FlowayUser {

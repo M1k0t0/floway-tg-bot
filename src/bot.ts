@@ -21,10 +21,10 @@ import {
   splitMessage,
 } from './format.js';
 import { FlowayClient, FlowayHttpError } from './floway-client.js';
-import { resolvePrimaryQuotaObservation, type PrimaryQuotaResolution } from './quota-window.js';
+import { resolveQuotaWindowObservation, type QuotaWindowResolution } from './quota-window.js';
 import {
   canShareUpstreamQuota,
-  selectPrimaryQuotaWindowForUpstream,
+  selectQuotaWindowForUpstream,
   summarizeUsageLeaderboard,
   summarizeUsageQuotaEstimate,
   summarizeUsageWindow,
@@ -35,7 +35,7 @@ import type { AppConfig, Binding, FlowayUser, UpstreamRecord } from './types.js'
 
 export { canShareUpstreamQuota } from './usage.js';
 
-export const TEST_PRIMARY_WINDOW_COMMAND = 'test_primary_window';
+export const TEST_QUOTA_WINDOW_COMMAND = 'test_quota_window';
 
 export const BOT_COMMANDS = [
   { command: 'start', description: 'Show bot usage help' },
@@ -259,18 +259,18 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
       }
       const upstream = selection.upstream;
 
-      const primaryResolution = resolvePrimaryQuotaObservation(upstream);
+      const primaryResolution = resolveQuotaWindowObservation(upstream);
       if (primaryResolution.status !== 'valid') {
-        await replyLong(ctx, formatPrimaryQuotaResolution(upstream, primaryResolution, 'usage'));
+        await replyLong(ctx, formatQuotaWindowResolution(upstream, primaryResolution, 'usage'));
         return;
       }
-      const primaryWindow = selectPrimaryQuotaWindowForUpstream(upstream)!;
+      const quotaWindow = selectQuotaWindowForUpstream(upstream)!;
 
       const exportSnapshot = await floway.exportUsageSnapshot();
       const report: UsageWindowReport = summarizeUsageWindow(
         bound.binding.flowayUserId,
         upstream.id,
-        primaryWindow,
+        quotaWindow,
         exportSnapshot,
       );
       await replyLong(ctx, formatUsageReports(upstream, [report]));
@@ -301,15 +301,15 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
         return;
       }
       const upstream = selection.upstream;
-      const primaryResolution = resolvePrimaryQuotaObservation(upstream);
+      const primaryResolution = resolveQuotaWindowObservation(upstream);
       if (primaryResolution.status !== 'valid') {
-        await replyLong(ctx, formatPrimaryQuotaResolution(upstream, primaryResolution, 'quota'));
+        await replyLong(ctx, formatQuotaWindowResolution(upstream, primaryResolution, 'quota'));
         return;
       }
-      const primaryWindow = selectPrimaryQuotaWindowForUpstream(upstream)!;
-      const primaryUsedPercent = primaryWindow.upstreamPercent;
+      const quotaWindow = selectQuotaWindowForUpstream(upstream)!;
+      const primaryUsedPercent = quotaWindow.upstreamPercent;
       if (primaryUsedPercent === undefined) {
-        await replyLong(ctx, formatValidWindowWithoutQuotaPercent(upstream, primaryWindow));
+        await replyLong(ctx, formatValidWindowWithoutQuotaPercent(upstream, quotaWindow));
         return;
       }
 
@@ -318,7 +318,7 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
       const report = summarizeUsageQuotaEstimate(
         bound.binding.flowayUserId,
         upstream.id,
-        primaryWindow,
+        quotaWindow,
         primaryUsedPercent,
         exportSnapshot,
         nonAdminUserCount,
@@ -347,7 +347,7 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
     }
   });
 
-  bot.command(TEST_PRIMARY_WINDOW_COMMAND, async ctx => {
+  bot.command(TEST_QUOTA_WINDOW_COMMAND, async ctx => {
     if (!(await requirePrivate(ctx))) return;
     const bound = await requireBinding(ctx, store, floway);
     if (!bound) return;
@@ -359,32 +359,32 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
         floway.listUsers(),
       ]);
       const allowedUpstreams = filterUpstreamsForUser(upstreams, bound.user).filter(upstream => upstream.enabled);
-      const selection = selectUpstream(upstreamId, allowedUpstreams, TEST_PRIMARY_WINDOW_COMMAND);
+      const selection = selectUpstream(upstreamId, allowedUpstreams, TEST_QUOTA_WINDOW_COMMAND);
       if ('message' in selection) {
         await replyLong(ctx, selection.message);
         return;
       }
 
       const upstream = selection.upstream;
-      const primaryResolution = resolvePrimaryQuotaObservation(upstream);
+      const primaryResolution = resolveQuotaWindowObservation(upstream);
       if (primaryResolution.status !== 'valid') {
-        await replyLong(ctx, formatPrimaryQuotaResolution(upstream, primaryResolution, 'diagnostic'));
+        await replyLong(ctx, formatQuotaWindowResolution(upstream, primaryResolution, 'diagnostic'));
         return;
       }
-      const primaryWindow = selectPrimaryQuotaWindowForUpstream(upstream)!;
+      const quotaWindow = selectQuotaWindowForUpstream(upstream)!;
 
       const exportSnapshot = await floway.exportUsageSnapshot();
       const usageReport = summarizeUsageWindow(
         bound.binding.flowayUserId,
         upstream.id,
-        primaryWindow,
+        quotaWindow,
         exportSnapshot,
       );
-      const quotaEstimate = formatPrimaryWindowQuotaEstimate(
+      const quotaEstimate = formatQuotaWindowQuotaEstimate(
         bound.binding.flowayUserId,
         upstream,
-        primaryWindow,
-        primaryWindow.upstreamPercent,
+        quotaWindow,
+        quotaWindow.upstreamPercent,
         exportSnapshot,
         users,
       );
@@ -594,7 +594,7 @@ export const filterUpstreamsForUser = (
 export const selectUpstream = (
   requestedId: string,
   upstreams: readonly UpstreamRecord[],
-  command: 'upstream' | 'usage' | 'quota' | 'quota verbose' | typeof TEST_PRIMARY_WINDOW_COMMAND,
+  command: 'upstream' | 'usage' | 'quota' | 'quota verbose' | typeof TEST_QUOTA_WINDOW_COMMAND,
 ): { upstream: UpstreamRecord } | { message: string } => {
   if (requestedId) {
     const upstream = upstreams.find(item => item.id === requestedId);
@@ -606,10 +606,10 @@ export const selectUpstream = (
   return { message: formatUpstreamSelectionRequired(command, upstreams) };
 };
 
-const formatPrimaryWindowQuotaEstimate = (
+const formatQuotaWindowQuotaEstimate = (
   flowayUserId: number,
   upstream: UpstreamRecord,
-  primaryWindow: NonNullable<ReturnType<typeof selectPrimaryQuotaWindowForUpstream>>,
+  quotaWindow: NonNullable<ReturnType<typeof selectQuotaWindowForUpstream>>,
   primaryUsedPercent: number | undefined,
   exportSnapshot: Parameters<typeof summarizeUsageWindow>[3],
   users: Awaited<ReturnType<FlowayClient['listUsers']>>,
@@ -620,7 +620,7 @@ const formatPrimaryWindowQuotaEstimate = (
   const report = summarizeUsageQuotaEstimate(
     flowayUserId,
     upstream.id,
-    primaryWindow,
+    quotaWindow,
     primaryUsedPercent,
     exportSnapshot,
     nonAdminUserCount,
@@ -628,9 +628,9 @@ const formatPrimaryWindowQuotaEstimate = (
   return formatQuotaEstimateNotification(report);
 };
 
-const formatPrimaryQuotaResolution = (
+const formatQuotaWindowResolution = (
   upstream: UpstreamRecord,
-  resolution: Exclude<PrimaryQuotaResolution, { status: 'valid' }>,
+  resolution: Exclude<QuotaWindowResolution, { status: 'valid' }>,
   surface: 'usage' | 'quota' | 'diagnostic',
 ): string => {
   const subject = `${htmlSafeText(upstream.name)} <code>${htmlSafeText(upstream.id)}</code>`;
@@ -646,7 +646,7 @@ const formatPrimaryQuotaResolution = (
 
 const formatValidWindowWithoutQuotaPercent = (
   upstream: UpstreamRecord,
-  window: NonNullable<ReturnType<typeof selectPrimaryQuotaWindowForUpstream>>,
+  window: NonNullable<ReturnType<typeof selectQuotaWindowForUpstream>>,
 ): string => [
   '<b>Quota estimate unavailable</b>',
   `${htmlSafeText(upstream.name)} <code>${htmlSafeText(upstream.id)}</code>`,

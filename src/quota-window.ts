@@ -39,6 +39,11 @@ export type QuotaWindowTransition =
 type CandidateKind = 'explicit' | 'fallback';
 type ProviderWindowSlot = 'primary' | 'secondary';
 
+export interface PremiumQuotaSnapshot {
+  bucketKey: string;
+  snapshot: unknown;
+}
+
 interface ParsedWindowFacts {
   startAt: string;
   startMs: number;
@@ -62,6 +67,21 @@ interface QuotaCandidate {
   snapshot: unknown;
 }
 
+export const premiumQuotaSnapshots = (
+  upstream: Pick<UpstreamRecord, 'kind' | 'codex_quota'>,
+): PremiumQuotaSnapshot[] => {
+  if (!isRecord(upstream) || upstream.kind !== 'codex' || !isRecord(upstream.codex_quota)) return [];
+  const explicit: PremiumQuotaSnapshot[] = [];
+  const fallback: PremiumQuotaSnapshot[] = [];
+  for (const [bucketKey, snapshot] of Object.entries(upstream.codex_quota)) {
+    const kind = premiumQuotaCandidateKind(bucketKey, snapshot);
+    if (kind === 'explicit') explicit.push({ bucketKey, snapshot });
+    if (kind === 'fallback') fallback.push({ bucketKey, snapshot });
+  }
+  return (explicit.length > 0 ? explicit : fallback)
+    .sort((left, right) => left.bucketKey.localeCompare(right.bucketKey));
+};
+
 export const resolveQuotaWindowObservation = (upstream: UpstreamRecord): QuotaWindowResolution => {
   try {
     if (!isRecord(upstream) || upstream.kind !== 'codex') return { status: 'unsupported' };
@@ -77,15 +97,10 @@ export const resolveQuotaWindowObservation = (upstream: UpstreamRecord): QuotaWi
     const entries = Object.entries(quota);
     if (entries.length === 0) return { status: 'missing' };
 
-    const explicit: QuotaCandidate[] = [];
-    const fallback: QuotaCandidate[] = [];
-    for (const [bucketKey, snapshot] of entries) {
-      const kind = premiumQuotaCandidateKind(bucketKey, snapshot);
-      if (kind === 'explicit') explicit.push({ bucketKey, snapshot });
-      if (kind === 'fallback') fallback.push({ bucketKey, snapshot });
-    }
-
-    const candidates = explicit.length > 0 ? explicit : fallback;
+    const candidates = premiumQuotaSnapshots(upstream).map(candidate => ({
+      bucketKey: candidate.bucketKey,
+      snapshot: candidate.snapshot,
+    }));
     if (candidates.length === 0) return { status: 'missing' };
     return resolveCandidates(upstream.id, candidates);
   } catch {

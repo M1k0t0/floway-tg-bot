@@ -1,13 +1,7 @@
-import {
-  parseQuotaWindowObservation,
-  CODEX_PREMIUM_ACTIVE_LIMIT,
-  resolveQuotaWindowObservation,
-  type QuotaWindowObservation,
-} from './quota-window.js';
+import type { QuotaWindowObservation } from './quota-window.js';
 import type {
   BillingDimension,
   BillingMetric,
-  CodexQuotaSnapshot,
   FlowayAdminUser,
   SanitizedExportSnapshot,
   TokenUsage,
@@ -41,13 +35,6 @@ export interface UsageWindow {
   quotaBucketKey?: string;
   quotaActiveLimit?: string;
 }
-
-export interface CodexQuotaBucket {
-  key: string;
-  snapshot: CodexQuotaSnapshot;
-}
-
-export const CODEX_QUOTA_ACTIVE_LIMIT = CODEX_PREMIUM_ACTIVE_LIMIT;
 
 export interface UsageWindowReport {
   window: UsageWindow;
@@ -100,17 +87,6 @@ export interface UsageQuotaEstimate {
   equalSharePercent: number | null;
   estimatedUserUsedPercent: number | null;
 }
-
-type WindowQuotaSnapshot = Pick<
-  CodexQuotaSnapshot,
-  | 'primary_used_percent'
-  | 'primary_window_minutes'
-  | 'primary_reset_after_at'
-> & Partial<Pick<
-  CodexQuotaSnapshot,
-  | 'observed_at'
-  | 'active_limit'
->>;
 
 const TOKEN_DIMENSION_BY_METRIC: Partial<Record<BillingMetric, BillingDimension>> = {
   input_tokens: 'input',
@@ -204,33 +180,6 @@ export const addUsageRecord = (totals: UsageTotals, record: UsageRecord): void =
 
 export const hourString = (date: Date): string => date.toISOString().slice(0, 13);
 
-export const codexQuotaBucketsForUpstream = (upstream: Pick<UpstreamRecord, 'kind' | 'codex_quota'>): CodexQuotaBucket[] => {
-  if (upstream.kind !== 'codex' || !isQuotaSnapshotMap(upstream.codex_quota)) return [];
-  const entries = Object.entries(upstream.codex_quota);
-  const explicit = entries.filter(([, snapshot]) =>
-    normalizeCodexQuotaActiveLimit(snapshot?.active_limit) === CODEX_QUOTA_ACTIVE_LIMIT);
-  const eligible = explicit.length > 0
-    ? explicit
-    : entries.filter(([key, snapshot]) =>
-      snapshot?.active_limit === undefined
-      && normalizeCodexQuotaActiveLimit(key) === CODEX_QUOTA_ACTIVE_LIMIT);
-  return eligible
-    .filter((entry): entry is [string, CodexQuotaSnapshot] => isQuotaSnapshot(entry[1]))
-    .map(([key, snapshot]) => ({ key, snapshot }))
-    .sort((a, b) => a.key.localeCompare(b.key));
-};
-
-const normalizeCodexQuotaActiveLimit = (value: unknown): string | null => {
-  if (typeof value !== 'string') return null;
-  const normalized = value.trim().toLowerCase();
-  return normalized || null;
-};
-
-export const selectQuotaWindowForUpstream = (upstream: Pick<UpstreamRecord, 'id' | 'kind' | 'codex_quota'>): UsageWindow | null => {
-  const resolution = resolveQuotaWindowObservation(upstream as UpstreamRecord);
-  return resolution.status === 'valid' ? quotaObservationToUsageWindow(resolution.observation) : null;
-};
-
 export const quotaObservationToUsageWindow = (observation: QuotaWindowObservation): UsageWindow => {
   const start = new Date(observation.startMs);
   const end = new Date(observation.endMs);
@@ -249,22 +198,6 @@ export const quotaObservationToUsageWindow = (observation: QuotaWindowObservatio
     quotaBucketKey: observation.bucketKey,
     quotaActiveLimit: observation.activeLimit,
   };
-};
-
-export const buildQuotaWindow = (
-  quota: WindowQuotaSnapshot | null | undefined,
-  bucket?: Pick<CodexQuotaBucket, 'key' | 'snapshot'>,
-): UsageWindow | null => {
-  if (!quota) return null;
-  const observation = parseQuotaWindowObservation(
-    'legacy',
-    bucket?.key ?? CODEX_QUOTA_ACTIVE_LIMIT,
-    {
-      ...quota,
-      active_limit: quota.active_limit ?? bucket?.snapshot.active_limit,
-    },
-  );
-  return observation ? quotaObservationToUsageWindow(observation) : null;
 };
 
 export const summarizeUsageWindow = (
@@ -417,9 +350,3 @@ const validDateOrFallback = (value: string, fallback: Date): Date => {
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? date : fallback;
 };
-
-const isQuotaSnapshotMap = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
-const isQuotaSnapshot = (value: unknown): value is CodexQuotaSnapshot =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);

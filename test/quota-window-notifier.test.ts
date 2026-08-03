@@ -74,6 +74,45 @@ describe('QuotaWindowNotifier', () => {
     expect(runtime.sendMessage).not.toHaveBeenCalled();
   });
 
+  it('treats a primary-to-secondary relabel as the same window', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T04:55:00.000Z');
+    const store = createStore();
+    bindAlice(store);
+    let upstream = quotaUpstream(
+      '2026-06-01T00:00:00.000Z',
+      '2026-06-08T00:00:00.000Z',
+      '2026-06-01T04:50:00.000Z',
+      70,
+      'primary',
+    );
+    const runtime = createRuntime(store, () => [upstream]);
+    await runtime.notifier.pollOnce();
+    const anchor = store.getCursor('up_a')?.anchor;
+
+    upstream = quotaUpstream(
+      '2026-06-01T00:00:00.000Z',
+      '2026-06-08T00:00:00.000Z',
+      '2026-06-01T04:51:00.000Z',
+      71,
+      'secondary',
+    );
+    await runtime.notifier.pollOnce();
+
+    expect(store.getCursor('up_a')).toMatchObject({
+      revision: 0,
+      anchor,
+      latest: {
+        observedAtMs: Date.parse('2026-06-01T04:51:00.000Z'),
+        usedPercent: 71,
+      },
+      pending: null,
+    });
+    expect(store.listEvents()).toEqual([]);
+    expect(store.listDeliveries()).toEqual([]);
+    expect(runtime.sendMessage).not.toHaveBeenCalled();
+  });
+
   it('requires two provider observations before committing and delivering a natural refresh', async () => {
     vi.useFakeTimers();
     vi.setSystemTime('2026-06-01T04:55:00.000Z');
@@ -97,6 +136,47 @@ describe('QuotaWindowNotifier', () => {
     expect(store.listDeliveries()).toEqual([expect.objectContaining({ status: 'sent', attempts: 1 })]);
     expect(runtime.sendMessage).toHaveBeenCalledTimes(1);
     expect(runtime.sendMessage.mock.calls[0]?.[1]).toContain('Provider-confirmed natural refresh');
+  });
+
+  it('confirms the same pending transition across provider slot relabeling', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T04:55:00.000Z');
+    const store = createStore();
+    bindAlice(store);
+    let upstream = quotaUpstream(
+      '2026-05-25T00:00:00.000Z',
+      '2026-06-01T00:00:00.000Z',
+      '2026-05-31T23:50:00.000Z',
+      80,
+      'primary',
+    );
+    const runtime = createRuntime(store, () => [upstream]);
+    await runtime.notifier.pollOnce();
+
+    vi.setSystemTime('2026-06-01T00:02:00.000Z');
+    upstream = quotaUpstream(
+      '2026-06-01T00:00:00.000Z',
+      '2026-06-08T00:00:00.000Z',
+      '2026-06-01T00:01:00.000Z',
+      2,
+      'primary',
+    );
+    await runtime.notifier.pollOnce();
+    expect(store.getCursor('up_a')).toMatchObject({ pending: { observationCount: 1 } });
+
+    vi.setSystemTime('2026-06-01T00:03:00.000Z');
+    upstream = quotaUpstream(
+      '2026-06-01T00:00:00.000Z',
+      '2026-06-08T00:00:00.000Z',
+      '2026-06-01T00:02:00.000Z',
+      3,
+      'secondary',
+    );
+    await runtime.notifier.pollOnce();
+
+    expect(store.getCursor('up_a')).toMatchObject({ revision: 1, pending: null });
+    expect(store.listEvents()).toHaveLength(1);
+    expect(runtime.sendMessage).toHaveBeenCalledTimes(1);
   });
 
   it('stores the latest exact provider observation when confirming a candidate', async () => {
@@ -309,7 +389,7 @@ describe('QuotaWindowNotifier', () => {
 
     expect(runtime.sendMessage).toHaveBeenCalledTimes(1);
     const text = runtime.sendMessage.mock.calls[0]?.[1] as string;
-    expect(text).toContain('Primary window refreshed');
+    expect(text).toContain('Quota window refreshed');
     expect(text).toContain('attribution are unavailable');
     expect(text.length).toBeLessThanOrEqual(3_800);
   });
@@ -357,6 +437,7 @@ const quotaUpstream = (
   endAt: string,
   observedAt: string,
   usedPercent: number,
+  slot: 'primary' | 'secondary' = 'primary',
 ): UpstreamRecord => ({
   id: 'up_a',
   kind: 'codex',
@@ -377,9 +458,9 @@ const quotaUpstream = (
     premium: {
       observed_at: observedAt,
       active_limit: 'premium',
-      primary_window_minutes: (Date.parse(endAt) - Date.parse(startAt)) / 60_000,
-      primary_reset_after_at: endAt,
-      primary_used_percent: usedPercent,
+      [`${slot}_window_minutes`]: (Date.parse(endAt) - Date.parse(startAt)) / 60_000,
+      [`${slot}_reset_after_at`]: endAt,
+      [`${slot}_used_percent`]: usedPercent,
     },
   },
 });

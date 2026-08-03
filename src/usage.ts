@@ -5,7 +5,6 @@ import type {
   FlowayAdminUser,
   SanitizedExportSnapshot,
   TokenUsage,
-  UpstreamRecord,
   UsageRecord,
 } from './types.js';
 

@@ -15,10 +15,20 @@ const floway = new FlowayClient({
 });
 
 const bot = createBot(config, store, floway);
+type TelegramCallOptions = NonNullable<Parameters<typeof bot.telegram.callApi>[2]>;
+
 const quotaWindowNotifier = new QuotaWindowNotifier({
   store,
   floway,
-  bot,
+  telegram: {
+    async sendMessage(chatId, text, signal) {
+      await bot.telegram.callApi('sendMessage', {
+        chat_id: chatId,
+        text,
+        parse_mode: 'HTML',
+      }, { signal: signal as TelegramCallOptions['signal'] });
+    },
+  },
   intervalSeconds: config.quotaWindowNotifyIntervalSeconds,
 });
 

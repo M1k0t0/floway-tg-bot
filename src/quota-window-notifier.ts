@@ -43,15 +43,13 @@ interface QuotaWindowFlowayClient {
 }
 
 interface TelegramSender {
-  telegram: {
-    sendMessage(chatId: string, text: string, extra: { parse_mode: 'HTML' }): Promise<unknown>;
-  };
+  sendMessage(chatId: string, text: string, signal: AbortSignal): Promise<unknown>;
 }
 
 interface QuotaWindowNotifierOptions {
   store: BindingStore;
   floway: QuotaWindowFlowayClient;
-  bot: TelegramSender;
+  telegram: TelegramSender;
   intervalSeconds: number;
 }
 
@@ -65,7 +63,13 @@ interface RefreshedBinding {
   user: AuthMeResponse['user'];
 }
 
+interface DeliveryEnrichment {
+  snapshot: SanitizedExportSnapshot;
+  users: FlowayAdminUser[];
+}
+
 const DELIVERY_LEASE_MS = 5 * 60_000;
+const TELEGRAM_SEND_TIMEOUT_MS = 60_000;
 const DELIVERY_RETRY_BASE_MS = 30_000;
 const DELIVERY_RETRY_CAP_MS = 60 * 60_000;
 const DELIVERY_MAX_ATTEMPTS = 8;
@@ -112,25 +116,24 @@ export class QuotaWindowNotifier {
   }
 
   private async poll(): Promise<void> {
-    const nowMs = Date.now();
     try {
-      await this.observeProviderWindows(nowMs);
+      await this.observeProviderWindows();
     } catch (error) {
       console.error('Quota window observation failed:', error);
     }
     try {
-      await this.dispatchDeliveries(nowMs);
+      await this.dispatchDeliveries();
     } catch (error) {
       console.error('Quota window delivery dispatch failed:', error);
     }
     try {
-      this.options.store.purgeTerminalEvents(Math.max(0, nowMs - TERMINAL_RETENTION_MS));
+      this.options.store.purgeTerminalEvents(Math.max(0, Date.now() - TERMINAL_RETENTION_MS));
     } catch (error) {
       console.error('Quota window delivery retention failed:', error);
     }
   }
 
-  private async observeProviderWindows(nowMs: number): Promise<void> {
+  private async observeProviderWindows(): Promise<void> {
     const upstreams = await this.options.floway.listUpstreams();
     const refreshedBindings = await this.refreshBindings();
 
@@ -153,7 +156,7 @@ export class QuotaWindowNotifier {
         ]
         : [];
       try {
-        this.applyObservation(upstream, resolution.observation, eligibleBindingIds, nowMs);
+        this.applyObservation(upstream, resolution.observation, eligibleBindingIds, Date.now());
       } catch (error) {
         if (error instanceof DatabaseRowError && error.table === 'quota_window_cursor') {
           console.error(`Reset corrupt quota window cursor for upstream ${upstream.id}:`, error);
@@ -295,25 +298,37 @@ export class QuotaWindowNotifier {
     }
   }
 
-  private async dispatchDeliveries(nowMs: number): Promise<void> {
+  private async dispatchDeliveries(): Promise<void> {
+    let enrichmentPromise: Promise<DeliveryEnrichment> | null = null;
+    const loadEnrichment = (): Promise<DeliveryEnrichment> => {
+      enrichmentPromise ??= Promise.all([
+        this.options.floway.exportUsageSnapshot(),
+        this.options.floway.listUsers(),
+      ]).then(([snapshot, users]) => ({ snapshot, users }));
+      return enrichmentPromise;
+    };
+
     for (let index = 0; index < MAX_DELIVERIES_PER_POLL; index += 1) {
       const delivery = this.options.store.claimDueDelivery({
-        nowMs,
+        nowMs: Date.now(),
         leaseDurationMs: DELIVERY_LEASE_MS,
       });
       if (!delivery) return;
-      await this.dispatchDelivery(delivery, nowMs);
+      await this.dispatchDelivery(delivery, loadEnrichment);
     }
   }
 
-  private async dispatchDelivery(delivery: QuotaWindowDelivery, nowMs: number): Promise<void> {
+  private async dispatchDelivery(
+    delivery: QuotaWindowDelivery,
+    loadEnrichment: () => Promise<DeliveryEnrichment>,
+  ): Promise<void> {
     const claimToken = delivery.claimToken;
     if (!claimToken) return;
     try {
       const event = this.options.store.getEvent(delivery.eventId);
       const binding = this.options.store.getByBindingId(delivery.bindingId);
       if (!event || !binding) {
-        this.options.store.markDeliverySkipped(delivery.deliveryId, claimToken, 'Binding or event no longer exists', nowMs);
+        this.markSkipped(delivery, claimToken, 'Binding or event no longer exists');
         return;
       }
 
@@ -323,18 +338,41 @@ export class QuotaWindowNotifier {
         return;
       }
       if (!canUseUpstream(me.user, event.upstreamId)) {
-        this.options.store.markDeliverySkipped(delivery.deliveryId, claimToken, 'Upstream is no longer available to this binding', nowMs);
+        this.markSkipped(delivery, claimToken, 'Upstream is no longer available to this binding');
         return;
       }
       const upstream = eventUpstream(event);
 
       let payload = delivery.payload;
       if (!payload) {
-        payload = await this.renderDelivery(event, binding, upstream);
-        if (!this.options.store.persistDeliveryPayload(delivery.deliveryId, claimToken, payload, nowMs)) return;
+        payload = await this.renderDelivery(event, binding, upstream, loadEnrichment);
+        const persistAtMs = Date.now();
+        if (!this.options.store.renewDeliveryLease(
+          delivery.deliveryId,
+          claimToken,
+          persistAtMs,
+          DELIVERY_LEASE_MS,
+        )) return;
+        if (!this.options.store.persistDeliveryPayload(
+          delivery.deliveryId,
+          claimToken,
+          payload,
+          persistAtMs,
+        )) return;
       }
-      await this.options.bot.telegram.sendMessage(binding.telegramUserId, payload, { parse_mode: 'HTML' });
-      this.options.store.markDeliverySent(delivery.deliveryId, claimToken, Date.now());
+
+      const sendAtMs = Date.now();
+      if (!this.options.store.renewDeliveryLease(
+        delivery.deliveryId,
+        claimToken,
+        sendAtMs,
+        DELIVERY_LEASE_MS,
+      )) return;
+
+      await this.sendTelegramMessage(binding.telegramUserId, payload);
+      if (!this.options.store.markDeliverySent(delivery.deliveryId, claimToken, Date.now())) {
+        console.warn(`Quota window delivery ${delivery.deliveryId} lost ownership after Telegram accepted the message`);
+      }
     } catch (error) {
       const binding = safeBinding(this.options.store, delivery.bindingId);
       if (error instanceof FlowayHttpError && error.status === 401 && binding) {
@@ -343,7 +381,9 @@ export class QuotaWindowNotifier {
       }
       const message = safeErrorMessage(error);
       if (isPermanentTelegramError(error) || delivery.attempts >= DELIVERY_MAX_ATTEMPTS) {
-        this.options.store.markDeliveryDead(delivery.deliveryId, claimToken, message, Date.now());
+        if (!this.options.store.markDeliveryDead(delivery.deliveryId, claimToken, message, Date.now())) {
+          console.warn(`Quota window delivery ${delivery.deliveryId} lost ownership before it could be marked dead`);
+        }
         return;
       }
       const retryDelay = Math.min(
@@ -351,7 +391,25 @@ export class QuotaWindowNotifier {
         DELIVERY_RETRY_BASE_MS * (2 ** Math.max(0, delivery.attempts - 1)),
       );
       const retryAt = Math.min(Date.now() + retryDelay, Number.MAX_SAFE_INTEGER);
-      this.options.store.markDeliveryRetry(delivery.deliveryId, claimToken, retryAt, message, Date.now());
+      if (!this.options.store.markDeliveryRetry(delivery.deliveryId, claimToken, retryAt, message, Date.now())) {
+        console.warn(`Quota window delivery ${delivery.deliveryId} lost ownership before it could be retried`);
+      }
+    }
+  }
+
+  private markSkipped(delivery: QuotaWindowDelivery, claimToken: string, reason: string): void {
+    if (!this.options.store.markDeliverySkipped(delivery.deliveryId, claimToken, reason, Date.now())) {
+      console.warn(`Quota window delivery ${delivery.deliveryId} lost ownership before it could be skipped`);
+    }
+  }
+
+  private async sendTelegramMessage(chatId: string, text: string): Promise<void> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), TELEGRAM_SEND_TIMEOUT_MS);
+    try {
+      await this.options.telegram.sendMessage(chatId, text, controller.signal);
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
@@ -359,13 +417,11 @@ export class QuotaWindowNotifier {
     event: QuotaWindowEvent,
     binding: Binding,
     upstream: UpstreamRecord,
+    loadEnrichment: () => Promise<DeliveryEnrichment>,
   ): Promise<string> {
     const previousWindow = eventPreviousUsageWindow(event);
     try {
-      const [snapshot, users] = await Promise.all([
-        this.options.floway.exportUsageSnapshot(),
-        this.options.floway.listUsers(),
-      ]);
+      const { snapshot, users } = await loadEnrichment();
       const report = summarizeUsageWindow(binding.flowayUserId, upstream.id, previousWindow, snapshot);
       const quotaEstimate = event.previous.usedPercent === null
         ? formatQuotaEstimateNotification(null)

@@ -252,18 +252,43 @@ describe('BindingStore delivery outbox', () => {
       .toMatchObject({ status: 'leased', attempts: 2, claimToken: 'worker-b' });
   });
 
-  it('rejects mutations from an expired lease before another worker reclaims it', () => {
-    const store = createStore();
-    const binding = store.replaceBinding({ telegramUserId: '100', flowayUserId: 1, username: 'alice', flowaySession: 'a' }, OBSERVED);
-    seedPending(store);
-    store.commitTransition(0, transition(), [binding.bindingId], current.observedAtMs);
+  it('renews an elapsed lease before reclaim and completes with the current fencing token', () => {
+    const { dbPath, secretKey } = createDatabasePath();
+    const first = track(new BindingStore(dbPath, secretKey));
+    const binding = first.replaceBinding({ telegramUserId: '100', flowayUserId: 1, username: 'alice', flowaySession: 'a' }, OBSERVED);
+    seedPending(first);
+    first.commitTransition(0, transition(), [binding.bindingId], current.observedAtMs);
+    const second = track(new BindingStore(dbPath, secretKey));
 
-    const claim = store.claimDueDelivery({ nowMs: current.observedAtMs, leaseDurationMs: 1_000, claimToken: 'expired' })!;
-    const expiredAt = current.observedAtMs + 1_000;
-    expect(store.persistDeliveryPayload(claim.deliveryId, 'expired', 'payload', expiredAt)).toBe(false);
-    expect(store.markDeliveryRetry(claim.deliveryId, 'expired', expiredAt + 1_000, 'late', expiredAt)).toBe(false);
-    expect(store.markDeliverySkipped(claim.deliveryId, 'expired', 'late', expiredAt)).toBe(false);
-    expect(store.markDeliveryDead(claim.deliveryId, 'expired', 'late', expiredAt)).toBe(false);
+    const claim = first.claimDueDelivery({ nowMs: current.observedAtMs, leaseDurationMs: 1_000, claimToken: 'current' })!;
+    const elapsedAt = current.observedAtMs + 1_000;
+    expect(first.renewDeliveryLease(claim.deliveryId, 'current', elapsedAt, 2_000)).toBe(true);
+    expect(first.persistDeliveryPayload(claim.deliveryId, 'current', 'payload', elapsedAt)).toBe(true);
+    expect(second.claimDueDelivery({ nowMs: elapsedAt + 1_999, leaseDurationMs: 1_000, claimToken: 'other' })).toBeNull();
+    expect(first.markDeliverySent(claim.deliveryId, 'current', elapsedAt + 2_000)).toBe(true);
+    expect(first.getDelivery(claim.deliveryId)).toMatchObject({ status: 'sent', sentAtMs: elapsedAt + 2_000 });
+  });
+
+  it('rejects every mutation from an old fencing token after reclaim', () => {
+    const { dbPath, secretKey } = createDatabasePath();
+    const first = track(new BindingStore(dbPath, secretKey));
+    const binding = first.replaceBinding({ telegramUserId: '100', flowayUserId: 1, username: 'alice', flowaySession: 'a' }, OBSERVED);
+    seedPending(first);
+    first.commitTransition(0, transition(), [binding.bindingId], current.observedAtMs);
+    const second = track(new BindingStore(dbPath, secretKey));
+
+    const firstClaim = first.claimDueDelivery({ nowMs: current.observedAtMs, leaseDurationMs: 1_000, claimToken: 'old' })!;
+    expect(first.persistDeliveryPayload(firstClaim.deliveryId, 'old', 'payload', current.observedAtMs)).toBe(true);
+    const reclaimedAt = current.observedAtMs + 1_000;
+    const reclaimed = second.claimDueDelivery({ nowMs: reclaimedAt, leaseDurationMs: 1_000, claimToken: 'new' })!;
+
+    expect(first.renewDeliveryLease(firstClaim.deliveryId, 'old', reclaimedAt, 1_000)).toBe(false);
+    expect(first.persistDeliveryPayload(firstClaim.deliveryId, 'old', 'different', reclaimedAt)).toBe(false);
+    expect(first.markDeliverySent(firstClaim.deliveryId, 'old', reclaimedAt)).toBe(false);
+    expect(first.markDeliveryRetry(firstClaim.deliveryId, 'old', reclaimedAt + 1_000, 'late', reclaimedAt)).toBe(false);
+    expect(first.markDeliverySkipped(firstClaim.deliveryId, 'old', 'late', reclaimedAt)).toBe(false);
+    expect(first.markDeliveryDead(firstClaim.deliveryId, 'old', 'late', reclaimedAt)).toBe(false);
+    expect(second.markDeliverySent(reclaimed.deliveryId, 'new', reclaimedAt + 1_000)).toBe(true);
   });
 
   it('uses token CAS for payload, retry, sent, skipped, and dead transitions', () => {

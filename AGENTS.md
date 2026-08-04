@@ -106,8 +106,10 @@ Important invariants:
   as an upstream early/manual refresh. Report the stored window truncated at
   the new start and include an explicit notification note.
 - Commit cursor advancement, immutable event data, and eligible delivery outbox
-  rows in one SQLite transaction. Telegram delivery is at-least-once and claimed
-  with expiring leases; a crash after Telegram accepts a message can duplicate it.
+  rows in one SQLite transaction. Expiring leases make abandoned deliveries
+  reclaimable, while claim tokens fence state changes by competing workers. Renew
+  ownership immediately before each bounded Telegram request. Delivery remains
+  at-least-once: a crash after Telegram accepts a message can duplicate it.
 - Quota estimates in notifications are estimates only; they derive from
   upstream-level hourly usage and raw token totals, and are not exact per-user quota
   accounting.

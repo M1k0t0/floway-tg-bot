@@ -438,7 +438,7 @@ describe('QuotaWindowNotifier', () => {
     expect(store.listDeliveries()).toEqual([expect.objectContaining({ status: 'sent', attempts: 2 })]);
   });
 
-  it('does not send after another worker reclaims before send-time renewal', async () => {
+  it('does not send or reschedule after another worker reclaims during profile refresh', async () => {
     vi.useFakeTimers();
     vi.setSystemTime('2026-06-01T05:03:00.000Z');
     const { dbPath, secretKey, store: firstStore } = createFileStore();
@@ -453,7 +453,7 @@ describe('QuotaWindowNotifier', () => {
         leaseDurationMs: 5 * 60_000,
         claimToken: 'replacement',
       })).toMatchObject({ claimToken: 'replacement', attempts: 1 });
-      return USER;
+      throw new Error('stale worker profile failure');
     });
 
     await runtime.notifier.pollOnce();

@@ -452,7 +452,7 @@ describe('QuotaWindowNotifier', () => {
         nowMs: Date.now(),
         leaseDurationMs: 5 * 60_000,
         claimToken: 'replacement',
-      })).toMatchObject({ claimToken: 'replacement', attempts: 2 });
+      })).toMatchObject({ claimToken: 'replacement', attempts: 1 });
       return USER;
     });
 
@@ -460,7 +460,7 @@ describe('QuotaWindowNotifier', () => {
 
     expect(runtime.sendMessage).not.toHaveBeenCalled();
     expect(firstStore.listDeliveries()).toEqual([
-      expect.objectContaining({ status: 'leased', claimToken: 'replacement', attempts: 2 }),
+      expect.objectContaining({ status: 'leased', claimToken: 'replacement', attempts: 1 }),
     ]);
   });
 

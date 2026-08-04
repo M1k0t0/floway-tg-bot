@@ -379,6 +379,7 @@ export class QuotaWindowNotifier {
         this.options.store.deleteBinding({ bindingId: binding.bindingId, telegramUserId: binding.telegramUserId });
         return;
       }
+      if (!this.ownsDelivery(delivery.deliveryId, claimToken)) return;
       const message = safeErrorMessage(error);
       if (isPermanentTelegramError(error) || delivery.attempts >= DELIVERY_MAX_ATTEMPTS) {
         if (!this.options.store.markDeliveryDead(delivery.deliveryId, claimToken, message, Date.now())) {
@@ -395,6 +396,11 @@ export class QuotaWindowNotifier {
         console.warn(`Quota window delivery ${delivery.deliveryId} lost ownership before it could be retried`);
       }
     }
+  }
+
+  private ownsDelivery(deliveryId: number, claimToken: string): boolean {
+    const current = this.options.store.getDelivery(deliveryId);
+    return current?.status === 'leased' && current.claimToken === claimToken;
   }
 
   private markSkipped(delivery: QuotaWindowDelivery, claimToken: string, reason: string): void {

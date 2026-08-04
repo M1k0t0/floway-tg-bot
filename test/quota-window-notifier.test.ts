@@ -552,7 +552,7 @@ describe('QuotaWindowNotifier', () => {
 const createRuntime = (
   store: BindingStore,
   upstreams: () => UpstreamRecord[] | Promise<UpstreamRecord[]>,
-  sendMessage = vi.fn(async (_chatId: string, _text: string, _extra: { parse_mode: 'HTML' }) => undefined),
+  sendMessage = vi.fn(async (_chatId: string, _text: string, _signal: AbortSignal): Promise<unknown> => undefined),
 ) => {
   const exportUsageSnapshot = vi.fn(async () => EMPTY_SNAPSHOT);
   const floway = {

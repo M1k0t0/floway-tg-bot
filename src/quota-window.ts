@@ -230,8 +230,8 @@ const parseCandidate = (
   }
 
   const slots = [
-    parseWindowSlot(snapshot, 'primary'),
-    parseWindowSlot(snapshot, 'secondary'),
+    parseWindowSlot(snapshot, 'primary', observed.ms),
+    parseWindowSlot(snapshot, 'secondary', observed.ms),
   ];
   if (slots.some(slot => slot.status === 'malformed')) {
     return { status: 'malformed', observedAtMs };
@@ -267,6 +267,7 @@ const parseCandidate = (
 const parseWindowSlot = (
   snapshot: Record<string, unknown>,
   slot: ProviderWindowSlot,
+  observedAtMs: number,
 ): ParsedWindowSlot => {
   const minutes = snapshot[`${slot}_window_minutes`];
   const resetAt = snapshot[`${slot}_reset_after_at`];
@@ -276,6 +277,9 @@ const parseWindowSlot = (
   }
 
   const end = parseRfc3339(resetAt);
+  if (minutes === 0 && usedPercent === 0 && end?.ms === observedAtMs) {
+    return { status: 'absent' };
+  }
   if (
     !Number.isSafeInteger(minutes)
     || (minutes as number) <= 0

@@ -161,6 +161,34 @@ describe('resolveQuotaWindowObservation', () => {
     });
   });
 
+  it('treats fully populated zero-duration sibling slots as absent', () => {
+    const observedAt = '2026-07-01T01:00:00Z';
+    const primaryWindow = snapshot(observedAt, '2026-07-01T02:00:00Z', {
+      secondary_window_minutes: 0,
+      secondary_reset_after_at: observedAt,
+      secondary_used_percent: 0,
+    });
+    const secondaryWindow: CodexQuotaSnapshot = {
+      observed_at: observedAt,
+      active_limit: 'premium',
+      primary_window_minutes: 0,
+      primary_reset_after_at: observedAt,
+      primary_used_percent: 0,
+      secondary_window_minutes: 10_080,
+      secondary_reset_after_at: '2026-07-08T00:00:00Z',
+      secondary_used_percent: 70,
+    };
+
+    expect(resolveQuotaWindowObservation(upstream({ plus: primaryWindow }))).toMatchObject({
+      status: 'valid',
+      observation: { durationMs: 60 * 60_000, usedPercent: 25 },
+    });
+    expect(resolveQuotaWindowObservation(upstream({ plus: secondaryWindow }))).toMatchObject({
+      status: 'valid',
+      observation: { durationMs: 10_080 * 60_000, usedPercent: 70 },
+    });
+  });
+
   it('chooses the slot whose reset is latest when primary and secondary labels swap', () => {
     const fiveHour = {
       windowMinutes: 300,
@@ -248,6 +276,8 @@ describe('resolveQuotaWindowObservation', () => {
       { secondary_used_percent: 70 },
       { secondary_window_minutes: 10_080, secondary_reset_after_at: 'bad' },
       { secondary_window_minutes: 0, secondary_reset_after_at: '2026-07-08T00:00:00Z' },
+      { secondary_window_minutes: 0, secondary_reset_after_at: '2026-07-01T01:00:00Z' },
+      { secondary_window_minutes: 0, secondary_reset_after_at: '2026-07-01T01:00:00Z', secondary_used_percent: 1 },
       { secondary_window_minutes: 10_080, secondary_reset_after_at: '2026-07-08T00:00:00Z', secondary_used_percent: 101 },
     ];
 

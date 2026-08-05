@@ -91,10 +91,11 @@ quota window advances.
 Important invariants:
 
 - Resolve the `premium` active-limit snapshot independently from provider window
-  slots. Within the eligible snapshot, parse both `primary_*` and `secondary_*`
-  fields and select the valid window whose exact `reset_after_at` is latest;
-  equal resets prefer the longer duration. Never use the slot label as the
-  reporting-window identity.
+  slots. Treat a fully populated zero-minute, zero-percent slot whose reset matches
+  `observed_at` as absent; otherwise parse both `primary_*` and `secondary_*`
+  fields and select the valid window whose exact `reset_after_at` is latest; equal
+  resets prefer the longer duration. Never use the slot label as the reporting-window
+  identity.
 - Normalize provider timestamps to exact instants. Classify observations against an
   immutable anchor with a duration-relative tolerance capped at five hours; tolerated
   drift updates observation metadata but never moves the anchor.

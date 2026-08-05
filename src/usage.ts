@@ -1,11 +1,10 @@
+import type { QuotaWindowObservation } from './quota-window.js';
 import type {
   BillingDimension,
   BillingMetric,
-  CodexQuotaSnapshot,
   FlowayAdminUser,
   SanitizedExportSnapshot,
   TokenUsage,
-  UpstreamRecord,
   UsageRecord,
 } from './types.js';
 
@@ -21,22 +20,20 @@ export const BILLING_DIMENSIONS: readonly BillingDimension[] = [
 ];
 
 export interface UsageWindow {
-  label: 'Primary window';
+  label: 'Quota window';
   startHour: string;
   endHour: string;
   startAt: string;
   endAt: string;
+  observedAt?: string;
+  observedAtMs?: number;
+  startMs?: number;
+  endMs?: number;
+  durationMs?: number;
   upstreamPercent?: number;
   quotaBucketKey?: string;
   quotaActiveLimit?: string;
 }
-
-export interface CodexQuotaBucket {
-  key: string;
-  snapshot: CodexQuotaSnapshot;
-}
-
-export const CODEX_QUOTA_ACTIVE_LIMIT = 'premium';
 
 export interface UsageWindowReport {
   window: UsageWindow;
@@ -89,13 +86,6 @@ export interface UsageQuotaEstimate {
   equalSharePercent: number | null;
   estimatedUserUsedPercent: number | null;
 }
-
-type WindowQuotaSnapshot = Pick<
-  CodexQuotaSnapshot,
-  | 'primary_used_percent'
-  | 'primary_window_minutes'
-  | 'primary_reset_after_at'
->;
 
 const TOKEN_DIMENSION_BY_METRIC: Partial<Record<BillingMetric, BillingDimension>> = {
   input_tokens: 'input',
@@ -189,42 +179,24 @@ export const addUsageRecord = (totals: UsageTotals, record: UsageRecord): void =
 
 export const hourString = (date: Date): string => date.toISOString().slice(0, 13);
 
-export const codexQuotaBucketsForUpstream = (upstream: Pick<UpstreamRecord, 'kind' | 'codex_quota'>): CodexQuotaBucket[] => {
-  if (upstream.kind !== 'codex' || !upstream.codex_quota) return [];
-  return Object.entries(upstream.codex_quota)
-    .filter(([key, snapshot]) => isPremiumCodexQuotaBucket(key, snapshot))
-    .map(([key, snapshot]) => ({ key, snapshot }))
-    .sort((a, b) => a.key.localeCompare(b.key));
-};
-
-const isPremiumCodexQuotaBucket = (key: string, snapshot: CodexQuotaSnapshot): boolean =>
-  normalizeCodexQuotaActiveLimit(snapshot.active_limit) === CODEX_QUOTA_ACTIVE_LIMIT
-  || normalizeCodexQuotaActiveLimit(key) === CODEX_QUOTA_ACTIVE_LIMIT;
-
-const normalizeCodexQuotaActiveLimit = (value: string | undefined): string | null => {
-  const normalized = value?.trim().toLowerCase();
-  return normalized || null;
-};
-
-export const selectPrimaryQuotaWindowForUpstream = (upstream: Pick<UpstreamRecord, 'kind' | 'codex_quota'>): UsageWindow | null => {
-  for (const bucket of codexQuotaBucketsForUpstream(upstream)) {
-    const window = buildPrimaryQuotaWindow(bucket.snapshot, bucket);
-    if (window) return window;
-  }
-  return null;
-};
-
-export const buildPrimaryQuotaWindow = (
-  quota: WindowQuotaSnapshot | null | undefined,
-  bucket?: Pick<CodexQuotaBucket, 'key' | 'snapshot'>,
-): UsageWindow | null => {
-  if (!quota) return null;
-  return quotaWindow(
-    quota.primary_window_minutes,
-    quota.primary_reset_after_at,
-    quota.primary_used_percent,
-    bucket,
-  );
+export const quotaObservationToUsageWindow = (observation: QuotaWindowObservation): UsageWindow => {
+  const start = new Date(observation.startMs);
+  const end = new Date(observation.endMs);
+  return {
+    label: 'Quota window',
+    startAt: observation.startAt,
+    endAt: observation.endAt,
+    startHour: hourString(start),
+    endHour: hourString(end),
+    observedAt: observation.observedAt,
+    observedAtMs: observation.observedAtMs,
+    startMs: observation.startMs,
+    endMs: observation.endMs,
+    durationMs: observation.durationMs,
+    ...(observation.usedPercent !== null ? { upstreamPercent: observation.usedPercent } : {}),
+    quotaBucketKey: observation.bucketKey,
+    quotaActiveLimit: observation.activeLimit,
+  };
 };
 
 export const summarizeUsageWindow = (
@@ -376,26 +348,4 @@ const compareByCachePercent = (a: UsageLeaderboardEntry, b: UsageLeaderboardEntr
 const validDateOrFallback = (value: string, fallback: Date): Date => {
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? date : fallback;
-};
-
-const quotaWindow = (
-  minutes: number | undefined,
-  resetAt: string | undefined,
-  upstreamPercent: number | undefined,
-  bucket?: Pick<CodexQuotaBucket, 'key' | 'snapshot'>,
-): UsageWindow | null => {
-  if (!minutes || !resetAt) return null;
-  const end = new Date(resetAt);
-  if (!Number.isFinite(end.getTime())) return null;
-  const start = new Date(end.getTime() - minutes * 60_000);
-  return {
-    label: 'Primary window',
-    startAt: start.toISOString(),
-    endAt: end.toISOString(),
-    startHour: hourString(start),
-    endHour: hourString(end),
-    ...(upstreamPercent !== undefined ? { upstreamPercent } : {}),
-    ...(bucket ? { quotaBucketKey: bucket.key } : {}),
-    ...(bucket?.snapshot.active_limit ? { quotaActiveLimit: bucket.snapshot.active_limit } : {}),
-  };
 };

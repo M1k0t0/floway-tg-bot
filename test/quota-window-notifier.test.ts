@@ -1,0 +1,671 @@
+import { randomBytes } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  BindingStore,
+  type NewQuotaWindowEvent,
+  type QuotaWindowFacts,
+} from '../src/db.js';
+import { QuotaWindowNotifier } from '../src/quota-window-notifier.js';
+import type {
+  AuthMeResponse,
+  FlowayAdminUser,
+  SanitizedExportSnapshot,
+  UpstreamRecord,
+} from '../src/types.js';
+
+const tempDirs: string[] = [];
+const stores: BindingStore[] = [];
+
+const USER: AuthMeResponse = {
+  user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
+  viaApiKey: false,
+  apiKey: null,
+};
+
+const ADMIN_USERS: FlowayAdminUser[] = [
+  { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-01T00:00:00.000Z' },
+];
+
+const EMPTY_SNAPSHOT: SanitizedExportSnapshot = {
+  exportedAt: '2026-06-01T05:05:00.000Z',
+  users: [{ id: 7, username: 'alice', deletedAt: null }],
+  apiKeys: [{
+    id: 'key_a',
+    userId: 7,
+    name: 'Alice key',
+    createdAt: '2026-06-01T00:00:00.000Z',
+    upstreamIds: null,
+    deletedAt: null,
+    dumpRetentionSeconds: null,
+    responsesRetentionSeconds: 0,
+  }],
+  usage: [],
+};
+
+afterEach(() => {
+  vi.useRealTimers();
+  for (const store of stores.splice(0)) store.close();
+  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+describe('QuotaWindowNotifier', () => {
+  it('silently seeds the first provider observation', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T04:55:00.000Z');
+    const store = createStore();
+    bindAlice(store);
+    const upstream = quotaUpstream('2026-06-01T00:00:00.000Z', '2026-06-01T05:00:00.000Z', '2026-06-01T04:50:00.000Z', 80);
+    const runtime = createRuntime(store, () => [upstream]);
+
+    await runtime.notifier.pollOnce();
+
+    expect(store.getCursor('up_a')).toMatchObject({
+      revision: 0,
+      anchor: { startAtMs: Date.parse('2026-06-01T00:00:00.000Z'), endAtMs: Date.parse('2026-06-01T05:00:00.000Z') },
+      pending: null,
+    });
+    expect(store.listEvents()).toEqual([]);
+    expect(store.listDeliveries()).toEqual([]);
+    expect(runtime.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('treats a primary-to-secondary relabel as the same window', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T04:55:00.000Z');
+    const store = createStore();
+    bindAlice(store);
+    let upstream = quotaUpstream(
+      '2026-06-01T00:00:00.000Z',
+      '2026-06-08T00:00:00.000Z',
+      '2026-06-01T04:50:00.000Z',
+      70,
+      'primary',
+    );
+    const runtime = createRuntime(store, () => [upstream]);
+    await runtime.notifier.pollOnce();
+    const anchor = store.getCursor('up_a')?.anchor;
+
+    upstream = quotaUpstream(
+      '2026-06-01T00:00:00.000Z',
+      '2026-06-08T00:00:00.000Z',
+      '2026-06-01T04:51:00.000Z',
+      71,
+      'secondary',
+    );
+    await runtime.notifier.pollOnce();
+
+    expect(store.getCursor('up_a')).toMatchObject({
+      revision: 0,
+      anchor,
+      latest: {
+        observedAtMs: Date.parse('2026-06-01T04:51:00.000Z'),
+        usedPercent: 71,
+      },
+      pending: null,
+    });
+    expect(store.listEvents()).toEqual([]);
+    expect(store.listDeliveries()).toEqual([]);
+    expect(runtime.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('requires two provider observations before committing and delivering a natural refresh', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T04:55:00.000Z');
+    const store = createStore();
+    bindAlice(store);
+    let upstream = quotaUpstream('2026-06-01T00:00:00.000Z', '2026-06-01T05:00:00.000Z', '2026-06-01T04:50:00.000Z', 80);
+    const runtime = createRuntime(store, () => [upstream]);
+    await runtime.notifier.pollOnce();
+
+    vi.setSystemTime('2026-06-01T05:02:00.000Z');
+    upstream = quotaUpstream('2026-06-01T05:00:00.000Z', '2026-06-01T10:00:00.000Z', '2026-06-01T05:01:00.000Z', 2);
+    await runtime.notifier.pollOnce();
+    expect(store.getCursor('up_a')).toMatchObject({ revision: 0, pending: { kind: 'natural', observationCount: 1 } });
+    expect(runtime.sendMessage).not.toHaveBeenCalled();
+
+    vi.setSystemTime('2026-06-01T05:03:00.000Z');
+    await runtime.notifier.pollOnce();
+
+    expect(store.getCursor('up_a')).toMatchObject({ revision: 1, pending: null });
+    expect(store.listEvents()).toEqual([expect.objectContaining({ kind: 'natural' })]);
+    expect(store.listDeliveries()).toEqual([expect.objectContaining({ status: 'sent', attempts: 1 })]);
+    expect(runtime.sendMessage).toHaveBeenCalledTimes(1);
+    expect(runtime.sendMessage.mock.calls[0]?.[1]).toContain('Provider-confirmed natural refresh');
+  });
+
+  it('confirms the same pending transition across provider slot relabeling', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T04:55:00.000Z');
+    const store = createStore();
+    bindAlice(store);
+    let upstream = quotaUpstream(
+      '2026-05-25T00:00:00.000Z',
+      '2026-06-01T00:00:00.000Z',
+      '2026-05-31T23:50:00.000Z',
+      80,
+      'primary',
+    );
+    const runtime = createRuntime(store, () => [upstream]);
+    await runtime.notifier.pollOnce();
+
+    vi.setSystemTime('2026-06-01T00:02:00.000Z');
+    upstream = quotaUpstream(
+      '2026-06-01T00:00:00.000Z',
+      '2026-06-08T00:00:00.000Z',
+      '2026-06-01T00:01:00.000Z',
+      2,
+      'primary',
+    );
+    await runtime.notifier.pollOnce();
+    expect(store.getCursor('up_a')).toMatchObject({ pending: { observationCount: 1 } });
+
+    vi.setSystemTime('2026-06-01T00:03:00.000Z');
+    upstream = quotaUpstream(
+      '2026-06-01T00:00:00.000Z',
+      '2026-06-08T00:00:00.000Z',
+      '2026-06-01T00:02:00.000Z',
+      3,
+      'secondary',
+    );
+    await runtime.notifier.pollOnce();
+
+    expect(store.getCursor('up_a')).toMatchObject({ revision: 1, pending: null });
+    expect(store.listEvents()).toHaveLength(1);
+    expect(runtime.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('stores the latest exact provider observation when confirming a candidate', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T04:55:00.000Z');
+    const store = createStore();
+    bindAlice(store);
+    let upstream = quotaUpstream('2026-06-01T00:00:00.000Z', '2026-06-01T05:00:00.000Z', '2026-06-01T04:50:00.000Z', 80);
+    const runtime = createRuntime(store, () => [upstream]);
+    await runtime.notifier.pollOnce();
+
+    vi.setSystemTime('2026-06-01T05:02:00.000Z');
+    upstream = quotaUpstream('2026-06-01T05:00:00.000Z', '2026-06-01T10:00:00.000Z', '2026-06-01T05:01:00.000Z', 2);
+    await runtime.notifier.pollOnce();
+    vi.setSystemTime('2026-06-01T05:03:00.000Z');
+    upstream = quotaUpstream('2026-06-01T05:01:00.000Z', '2026-06-01T10:01:00.000Z', '2026-06-01T05:02:00.000Z', 3);
+    await runtime.notifier.pollOnce();
+
+    expect(store.listEvents()).toEqual([expect.objectContaining({
+      current: expect.objectContaining({
+        startAtMs: Date.parse('2026-06-01T05:01:00.000Z'),
+        endAtMs: Date.parse('2026-06-01T10:01:00.000Z'),
+        observedAtMs: Date.parse('2026-06-01T05:02:00.000Z'),
+        usedPercent: 3,
+      }),
+    })]);
+  });
+
+  it('keeps a recipient when binding refresh temporarily fails during confirmation', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T04:55:00.000Z');
+    const store = createStore();
+    bindAlice(store);
+    let upstream = quotaUpstream('2026-06-01T00:00:00.000Z', '2026-06-01T05:00:00.000Z', '2026-06-01T04:50:00.000Z', 80);
+    const runtime = createRuntime(store, () => [upstream]);
+    await runtime.notifier.pollOnce();
+
+    vi.setSystemTime('2026-06-01T05:02:00.000Z');
+    upstream = quotaUpstream('2026-06-01T05:00:00.000Z', '2026-06-01T10:00:00.000Z', '2026-06-01T05:01:00.000Z', 2);
+    await runtime.notifier.pollOnce();
+    vi.setSystemTime('2026-06-01T05:03:00.000Z');
+    runtime.floway.getMe.mockRejectedValueOnce(new Error('temporary profile failure'));
+    await runtime.notifier.pollOnce();
+
+    expect(store.listEvents()).toHaveLength(1);
+    expect(store.listDeliveries()).toEqual([expect.objectContaining({ status: 'sent' })]);
+    expect(runtime.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not confirm a provider window before its exact start in the same hour', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T04:55:00.000Z');
+    const store = createStore();
+    bindAlice(store);
+    let upstream = quotaUpstream('2026-06-01T00:30:00.000Z', '2026-06-01T05:30:00.000Z', '2026-06-01T04:50:00.000Z', 80);
+    const runtime = createRuntime(store, () => [upstream]);
+    await runtime.notifier.pollOnce();
+
+    upstream = quotaUpstream('2026-06-01T05:30:00.000Z', '2026-06-01T10:30:00.000Z', '2026-06-01T05:05:00.000Z', 1);
+    vi.setSystemTime('2026-06-01T05:10:00.000Z');
+    await runtime.notifier.pollOnce();
+    await runtime.notifier.pollOnce();
+    expect(store.getCursor('up_a')).toMatchObject({ revision: 0, pending: { observationCount: 1 } });
+    expect(runtime.sendMessage).not.toHaveBeenCalled();
+
+    vi.setSystemTime('2026-06-01T05:31:00.000Z');
+    await runtime.notifier.pollOnce();
+    expect(store.getCursor('up_a')?.revision).toBe(1);
+    expect(runtime.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the canonical anchor stable across tolerated timestamp drift', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-08T00:00:00.000Z');
+    const store = createStore();
+    bindAlice(store);
+    let upstream = quotaUpstream('2026-06-01T00:00:00.000Z', '2026-06-08T00:00:00.000Z', '2026-06-07T23:00:00.000Z', 60);
+    const runtime = createRuntime(store, () => [upstream]);
+    await runtime.notifier.pollOnce();
+    const originalAnchor = store.getCursor('up_a')?.anchor;
+
+    upstream = quotaUpstream('2026-06-01T04:00:00.000Z', '2026-06-08T04:00:00.000Z', '2026-06-08T00:01:00.000Z', 62);
+    await runtime.notifier.pollOnce();
+    expect(store.getCursor('up_a')?.anchor).toEqual(originalAnchor);
+
+    upstream = quotaUpstream('2026-06-01T08:00:00.000Z', '2026-06-08T08:00:00.000Z', '2026-06-08T00:02:00.000Z', 63);
+    await runtime.notifier.pollOnce();
+    expect(store.getCursor('up_a')?.anchor).toEqual(originalAnchor);
+    expect(runtime.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('detects an early manual refresh for a five-hour window', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T02:50:00.000Z');
+    const store = createStore();
+    bindAlice(store);
+    let upstream = quotaUpstream('2026-06-01T00:00:00.000Z', '2026-06-01T05:00:00.000Z', '2026-06-01T02:45:00.000Z', 70);
+    const runtime = createRuntime(store, () => [upstream]);
+    await runtime.notifier.pollOnce();
+
+    upstream = quotaUpstream('2026-06-01T03:00:00.000Z', '2026-06-01T08:00:00.000Z', '2026-06-01T03:01:00.000Z', 4);
+    vi.setSystemTime('2026-06-01T03:02:00.000Z');
+    await runtime.notifier.pollOnce();
+    await runtime.notifier.pollOnce();
+
+    expect(store.listEvents()).toEqual([expect.objectContaining({
+      kind: 'manual',
+      effectivePreviousUsageEndAtMs: Date.parse('2026-06-01T03:00:00.000Z'),
+    })]);
+    expect(runtime.sendMessage.mock.calls[0]?.[1]).toContain('Early/manual provider refresh');
+  });
+
+  it('preserves the cursor and never fabricates resets while quota is missing or malformed', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T04:55:00.000Z');
+    const store = createStore();
+    bindAlice(store);
+    let upstream = quotaUpstream('2026-06-01T00:00:00.000Z', '2026-06-01T05:00:00.000Z', '2026-06-01T04:50:00.000Z', 80);
+    const runtime = createRuntime(store, () => [upstream]);
+    await runtime.notifier.pollOnce();
+    const anchor = store.getCursor('up_a')?.anchor;
+
+    vi.setSystemTime('2026-06-02T05:00:00.000Z');
+    upstream = { ...upstream, codex_quota: null };
+    await runtime.notifier.pollOnce();
+    upstream = { ...upstream, codex_quota: { premium: { observed_at: 'bad', active_limit: 'premium' } } };
+    await runtime.notifier.pollOnce();
+
+    expect(store.getCursor('up_a')?.anchor).toEqual(anchor);
+    expect(store.listEvents()).toEqual([]);
+    expect(runtime.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('advances the cursor before Telegram delivery and retries a failed send after restart', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T04:55:00.000Z');
+    const { dbPath, secretKey, store } = createFileStore();
+    bindAlice(store);
+    let upstream = quotaUpstream('2026-06-01T00:00:00.000Z', '2026-06-01T05:00:00.000Z', '2026-06-01T04:50:00.000Z', 80);
+    const failing = createRuntime(store, () => [upstream]);
+    failing.sendMessage.mockRejectedValueOnce(new Error('temporary Telegram failure'));
+    await failing.notifier.pollOnce();
+
+    upstream = quotaUpstream('2026-06-01T05:00:00.000Z', '2026-06-01T10:00:00.000Z', '2026-06-01T05:01:00.000Z', 1);
+    vi.setSystemTime('2026-06-01T05:02:00.000Z');
+    await failing.notifier.pollOnce();
+    vi.setSystemTime('2026-06-01T05:03:00.000Z');
+    await failing.notifier.pollOnce();
+
+    expect(store.getCursor('up_a')?.revision).toBe(1);
+    expect(store.listDeliveries()).toEqual([expect.objectContaining({ status: 'pending', attempts: 1 })]);
+    store.close();
+    stores.splice(stores.indexOf(store), 1);
+
+    vi.setSystemTime('2026-06-01T05:03:31.000Z');
+    const reopened = track(new BindingStore(dbPath, secretKey));
+    const restarted = createRuntime(reopened, () => [upstream]);
+    await restarted.notifier.pollOnce();
+
+    expect(reopened.listEvents()).toHaveLength(1);
+    expect(reopened.listDeliveries()).toEqual([expect.objectContaining({ status: 'sent', attempts: 2 })]);
+    expect(restarted.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows only one of two notifier instances to claim a pending delivery', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T05:03:00.000Z');
+    const { dbPath, secretKey, store: firstStore } = createFileStore();
+    const binding = bindAlice(firstStore);
+    seedPendingDelivery(firstStore, binding.bindingId);
+    const secondStore = track(new BindingStore(dbPath, secretKey));
+    const upstream = quotaUpstream('2026-06-01T05:00:00.000Z', '2026-06-01T10:00:00.000Z', '2026-06-01T05:01:00.000Z', 1);
+    const sendMessage = vi.fn(async (_chatId: string, _text: string, _signal: AbortSignal) => undefined);
+    const first = createRuntime(firstStore, () => [upstream], sendMessage);
+    const second = createRuntime(secondStore, () => [upstream], sendMessage);
+
+    await Promise.all([first.notifier.pollOnce(), second.notifier.pollOnce()]);
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(firstStore.listDeliveries()).toEqual([expect.objectContaining({ status: 'sent' })]);
+  });
+
+  it('drains an existing delivery even when provider observation loading fails', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T05:03:00.000Z');
+    const store = createStore();
+    const binding = bindAlice(store);
+    seedPendingDelivery(store, binding.bindingId);
+    const runtime = createRuntime(store, async () => {
+      throw new Error('upstreams unavailable');
+    });
+
+    await runtime.notifier.pollOnce();
+
+    expect(runtime.sendMessage).toHaveBeenCalledTimes(1);
+    expect(store.listDeliveries()).toEqual([expect.objectContaining({ status: 'sent' })]);
+  });
+
+  it('uses fresh delivery time after slow observation work and does not resend', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T05:03:00.000Z');
+    const store = createStore();
+    const binding = bindAlice(store);
+    seedPendingDelivery(store, binding.bindingId);
+    const runtime = createRuntime(store, async () => {
+      await vi.advanceTimersByTimeAsync(6 * 60_000);
+      throw new Error('slow upstream load failed');
+    });
+
+    await runtime.notifier.pollOnce();
+    expect(runtime.sendMessage).toHaveBeenCalledTimes(1);
+    expect(store.listDeliveries()).toEqual([expect.objectContaining({ status: 'sent', attempts: 1 })]);
+
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
+    await runtime.notifier.pollOnce();
+    expect(runtime.sendMessage).toHaveBeenCalledTimes(1);
+    expect(store.listDeliveries()).toEqual([expect.objectContaining({ status: 'sent', attempts: 1 })]);
+  });
+
+  it('renews after slow enrichment before persisting and sending', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T05:03:00.000Z');
+    const store = createStore();
+    const binding = bindAlice(store);
+    seedPendingDelivery(store, binding.bindingId);
+    const upstream = quotaUpstream('2026-06-01T05:00:00.000Z', '2026-06-01T10:00:00.000Z', '2026-06-01T05:01:00.000Z', 1);
+    const runtime = createRuntime(store, () => [upstream]);
+    runtime.exportUsageSnapshot.mockImplementationOnce(async () => {
+      await vi.advanceTimersByTimeAsync(6 * 60_000);
+      return EMPTY_SNAPSHOT;
+    });
+
+    await runtime.notifier.pollOnce();
+
+    expect(runtime.sendMessage).toHaveBeenCalledTimes(1);
+    expect(store.listDeliveries()).toEqual([
+      expect.objectContaining({ status: 'sent', attempts: 1, payload: expect.any(String) }),
+    ]);
+  });
+
+  it('renews a persisted payload before sending it', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T05:03:00.000Z');
+    const store = createStore();
+    const binding = bindAlice(store);
+    seedPendingDelivery(store, binding.bindingId);
+    const delivery = store.claimDueDelivery({
+      nowMs: Date.now(),
+      leaseDurationMs: 1,
+      claimToken: 'prepare',
+    })!;
+    expect(store.persistDeliveryPayload(delivery.deliveryId, 'prepare', 'stored payload', Date.now())).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    const runtime = createRuntime(store, () => []);
+
+    await runtime.notifier.pollOnce();
+
+    expect(runtime.sendMessage).toHaveBeenCalledWith('100', 'stored payload', expect.any(AbortSignal));
+    expect(store.listDeliveries()).toEqual([expect.objectContaining({ status: 'sent', attempts: 2 })]);
+  });
+
+  it('does not send or reschedule after another worker reclaims during profile refresh', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T05:03:00.000Z');
+    const { dbPath, secretKey, store: firstStore } = createFileStore();
+    const binding = bindAlice(firstStore);
+    seedPendingDelivery(firstStore, binding.bindingId);
+    const secondStore = track(new BindingStore(dbPath, secretKey));
+    const runtime = createRuntime(firstStore, () => []);
+    runtime.floway.getMe.mockImplementationOnce(async () => {
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(secondStore.claimDueDelivery({
+        nowMs: Date.now(),
+        leaseDurationMs: 5 * 60_000,
+        claimToken: 'replacement',
+      })).toMatchObject({ claimToken: 'replacement', attempts: 1 });
+      throw new Error('stale worker profile failure');
+    });
+
+    await runtime.notifier.pollOnce();
+
+    expect(runtime.sendMessage).not.toHaveBeenCalled();
+    expect(firstStore.listDeliveries()).toEqual([
+      expect.objectContaining({ status: 'leased', claimToken: 'replacement', attempts: 1 }),
+    ]);
+  });
+
+  it('aborts a timed-out Telegram request and schedules a retry', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T05:03:00.000Z');
+    const store = createStore();
+    const binding = bindAlice(store);
+    seedPendingDelivery(store, binding.bindingId);
+    const sendMessage = vi.fn(async (_chatId: string, _text: string, signal: AbortSignal) => {
+      await new Promise<void>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new Error('Telegram request aborted')), { once: true });
+      });
+    });
+    const runtime = createRuntime(store, () => [], sendMessage);
+
+    const poll = runtime.notifier.pollOnce();
+    await vi.advanceTimersByTimeAsync(60_000);
+    await poll;
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(store.listDeliveries()).toEqual([
+      expect.objectContaining({ status: 'pending', attempts: 1, lastError: 'Telegram request aborted' }),
+    ]);
+  });
+
+  it('loads shared delivery enrichment once per dispatch batch', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T05:03:00.000Z');
+    const store = createStore();
+    const alice = bindAlice(store);
+    const second = bindUser(store, {
+      telegramUserId: '101',
+      flowayUserId: 7,
+      username: 'alice',
+      flowaySession: 'second-session',
+    });
+    seedPendingDeliveries(store, [alice.bindingId, second.bindingId]);
+    const runtime = createRuntime(store, () => []);
+
+    await runtime.notifier.pollOnce();
+
+    expect(runtime.sendMessage).toHaveBeenCalledTimes(2);
+    expect(runtime.exportUsageSnapshot).toHaveBeenCalledTimes(1);
+    expect(runtime.floway.listUsers).toHaveBeenCalledTimes(1);
+    expect(store.listDeliveries()).toEqual([
+      expect.objectContaining({ status: 'sent' }),
+      expect.objectContaining({ status: 'sent' }),
+    ]);
+  });
+
+  it('sends the reset alert with an unavailable section when enrichment fails', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T05:03:00.000Z');
+    const store = createStore();
+    const binding = bindAlice(store);
+    seedPendingDelivery(store, binding.bindingId);
+    const upstream = quotaUpstream('2026-06-01T05:00:00.000Z', '2026-06-01T10:00:00.000Z', '2026-06-01T05:01:00.000Z', 1);
+    const runtime = createRuntime(store, () => [upstream]);
+    runtime.exportUsageSnapshot.mockRejectedValue(new Error('bad export'));
+
+    await runtime.notifier.pollOnce();
+
+    expect(runtime.sendMessage).toHaveBeenCalledTimes(1);
+    const text = runtime.sendMessage.mock.calls[0]?.[1] as string;
+    expect(text).toContain('Quota window refreshed');
+    expect(text).toContain('attribution are unavailable');
+    expect(text.length).toBeLessThanOrEqual(3_800);
+  });
+
+  it('waits for an active observation poll before stopping', async () => {
+    const store = createStore();
+    let resolveUpstreams!: (upstreams: UpstreamRecord[]) => void;
+    const upstreamPromise = new Promise<UpstreamRecord[]>(resolve => {
+      resolveUpstreams = resolve;
+    });
+    const runtime = createRuntime(store, () => upstreamPromise);
+
+    const poll = runtime.notifier.pollOnce();
+    const stop = runtime.notifier.stop();
+    expect(await Promise.race([stop.then(() => 'stopped'), Promise.resolve('pending')])).toBe('pending');
+
+    resolveUpstreams([]);
+    await poll;
+    await stop;
+  });
+});
+
+const createRuntime = (
+  store: BindingStore,
+  upstreams: () => UpstreamRecord[] | Promise<UpstreamRecord[]>,
+  sendMessage = vi.fn(async (_chatId: string, _text: string, _signal: AbortSignal): Promise<unknown> => undefined),
+) => {
+  const exportUsageSnapshot = vi.fn(async () => EMPTY_SNAPSHOT);
+  const floway = {
+    listUpstreams: vi.fn(async () => await upstreams()),
+    listUsers: vi.fn(async () => ADMIN_USERS),
+    getMe: vi.fn(async () => USER),
+    exportUsageSnapshot,
+  };
+  return {
+    notifier: new QuotaWindowNotifier({ store, floway, telegram: { sendMessage }, intervalSeconds: 300 }),
+    floway,
+    sendMessage,
+    exportUsageSnapshot,
+  };
+};
+
+const quotaUpstream = (
+  startAt: string,
+  endAt: string,
+  observedAt: string,
+  usedPercent: number,
+  slot: 'primary' | 'secondary' = 'primary',
+): UpstreamRecord => ({
+  id: 'up_a',
+  kind: 'codex',
+  name: 'Codex main',
+  enabled: true,
+  sort_order: 1,
+  created_at: '2026-05-01T00:00:00.000Z',
+  updated_at: observedAt,
+  flag_overrides: {},
+  flag_defaults: {},
+  disabled_public_model_ids: [],
+  proxy_fallback_list: [],
+  model_prefix: null,
+  color: null,
+  config: {},
+  state: null,
+  codex_quota: {
+    premium: {
+      observed_at: observedAt,
+      active_limit: 'premium',
+      [`${slot}_window_minutes`]: (Date.parse(endAt) - Date.parse(startAt)) / 60_000,
+      [`${slot}_reset_after_at`]: endAt,
+      [`${slot}_used_percent`]: usedPercent,
+    },
+  },
+});
+
+const bindAlice = (store: BindingStore) => bindUser(store, {
+  telegramUserId: '100',
+  flowayUserId: 7,
+  username: 'alice',
+  flowaySession: 'session',
+});
+
+const bindUser = (
+  store: BindingStore,
+  user: { telegramUserId: string; flowayUserId: number; username: string; flowaySession: string },
+) => store.replaceBinding(user, Date.parse('2026-05-01T00:00:00.000Z'));
+
+const createStore = (): BindingStore => createFileStore().store;
+
+const createFileStore = (): { dbPath: string; secretKey: Buffer; store: BindingStore } => {
+  const dir = mkdtempSync(join(tmpdir(), 'floway-notifier-test-'));
+  tempDirs.push(dir);
+  const dbPath = join(dir, 'bot.sqlite');
+  const secretKey = randomBytes(32);
+  return { dbPath, secretKey, store: track(new BindingStore(dbPath, secretKey)) };
+};
+
+const track = (store: BindingStore): BindingStore => {
+  stores.push(store);
+  return store;
+};
+
+const seedPendingDelivery = (store: BindingStore, bindingId: number): void => {
+  seedPendingDeliveries(store, [bindingId]);
+};
+
+const seedPendingDeliveries = (store: BindingStore, bindingIds: readonly number[]): void => {
+  const previous = facts('2026-06-01T00:00:00.000Z', '2026-06-01T05:00:00.000Z', '2026-06-01T04:50:00.000Z', 80);
+  const current = facts('2026-06-01T05:00:00.000Z', '2026-06-01T10:00:00.000Z', '2026-06-01T05:01:00.000Z', 1);
+  store.seedCursor('up_a', previous);
+  store.stagePendingCandidate('up_a', 0, {
+    kind: 'natural',
+    startAtMs: current.startAtMs,
+    endAtMs: current.endAtMs,
+    durationMs: current.durationMs,
+    observedAtMs: current.observedAtMs,
+    firstSeenAtMs: Date.parse('2026-06-01T05:02:00.000Z'),
+  });
+  const event: NewQuotaWindowEvent = {
+    upstreamId: 'up_a',
+    fromRevision: 0,
+    toRevision: 1,
+    upstreamKind: 'codex',
+    upstreamName: 'Codex main',
+    kind: 'natural',
+    previous,
+    current,
+    detectedAtMs: Date.parse('2026-06-01T05:03:00.000Z'),
+    effectivePreviousUsageEndAtMs: null,
+  };
+  expect(store.commitTransition(0, event, bindingIds, Date.parse('2026-06-01T05:02:00.000Z')).status).toBe('committed');
+};
+
+const facts = (startAt: string, endAt: string, observedAt: string, usedPercent: number): QuotaWindowFacts => ({
+  startAtMs: Date.parse(startAt),
+  endAtMs: Date.parse(endAt),
+  durationMs: Date.parse(endAt) - Date.parse(startAt),
+  observedAtMs: Date.parse(observedAt),
+  usedPercent,
+  quotaBucketKey: 'premium',
+  activeLimit: 'premium',
+});

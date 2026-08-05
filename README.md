@@ -1,7 +1,7 @@
 # Floway Telegram Bot
 
 Telegram bot for Floway users to bind their Floway account, manage their own
-API keys, inspect upstreams, and view Codex primary-window usage.
+API keys, inspect upstreams, and view Codex quota-window usage.
 
 ## Setup
 
@@ -45,13 +45,29 @@ Binding, upstream, key, usage, quota, and leaderboard operations are private-cha
 Passwords are exchanged for a Floway session and are never stored. Floway
 sessions are encrypted locally with `BOT_SECRET_KEY`.
 
-Codex quota output uses the Floway Codex quota snapshot whose `active_limit`
-is `premium`. Other active-limit snapshots are intentionally ignored so usage
-and notification boundaries stay stable.
+Codex quota output first selects the Floway snapshot whose `active_limit` is
+`premium`; other active-limit snapshots are intentionally ignored. Within that
+premium snapshot, the bot treats a fully populated zero-minute, zero-percent
+slot whose reset matches `observed_at` as absent. It parses the remaining
+`primary_*` and `secondary_*` fields as provider slots and selects the valid
+window whose `reset_after_at` is latest. The slot label does not define the
+reporting period, so moving the same window between primary and secondary does
+not create a refresh.
 
 The bot also polls available upstreams and sends bound users a private summary
-when an upstream's Codex primary window advances. Tune the poll interval with
-`PRIMARY_WINDOW_NOTIFY_INTERVAL_SECONDS`.
+when the selected Codex quota window advances. Notifications are based only on
+confirmed Floway observations; usage attribution is an estimate from hourly
+export data. Tune the poll interval with `QUOTA_WINDOW_NOTIFY_INTERVAL_SECONDS`.
+
+## Database Upgrades
+
+The Node process applies SQLite migrations automatically during startup, before
+Telegram polling or the notifier starts. Migrations are ordered in
+`src/db-migrations/` and tracked with SQLite `user_version`; already-applied
+versions are skipped. There is no manual migration command.
+
+Back up `BOT_DB_PATH`, build the new version, and restart the bot normally. If a
+migration fails, startup aborts and the failed migration is rolled back.
 
 ## Bind Deep Links
 

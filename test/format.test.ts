@@ -5,18 +5,38 @@ import {
   formatInfo,
   formatKeys,
   formatQuotaEstimate,
-  formatQuotaEstimateInsufficient,
   formatQuotaEstimateNotification,
   formatQuotaEstimateVerbose,
-  formatPrimaryWindowNotification,
+  formatQuotaWindowNotification,
   formatStartHelp,
+  formatUpstreamDetail,
   formatUpstreamList,
   formatUsageLeaderboard,
+  splitMessage,
 } from '../src/format.js';
 import type { ApiKeyRecord, Binding, UpstreamRecord } from '../src/types.js';
 import type { UsageLeaderboardReport, UsageQuotaEstimate, UsageWindowReport } from '../src/usage.js';
 
 describe('formatters', () => {
+  it('splits long Telegram HTML only at independently valid boundaries', () => {
+    const text = [
+      `<b>${'a'.repeat(60)}</b>`,
+      `<code>${'x&lt;&amp;&gt;'.repeat(40)}</code>`,
+      `<b>${'z'.repeat(60)}</b>`,
+    ].join('\n');
+    const chunks = splitMessage(text, 80);
+
+    expect(chunks.length).toBeGreaterThan(3);
+    expect(chunks.every(chunk => chunk.length <= 80)).toBe(true);
+    for (const chunk of chunks) {
+      expect((chunk.match(/<b>/g) ?? []).length).toBe((chunk.match(/<\/b>/g) ?? []).length);
+      expect((chunk.match(/<code>/g) ?? []).length).toBe((chunk.match(/<\/code>/g) ?? []).length);
+      const lastAmpersand = chunk.lastIndexOf('&');
+      const lastSemicolon = chunk.lastIndexOf(';');
+      expect(lastAmpersand <= lastSemicolon || lastAmpersand === -1).toBe(true);
+    }
+  });
+
   it('escapes dynamic upstream fields for Telegram HTML', () => {
     const upstream: UpstreamRecord = {
       id: 'up_<a>&',
@@ -39,6 +59,47 @@ describe('formatters', () => {
     const text = formatUpstreamList([upstream]);
     expect(text).toContain('Codex &lt;main&gt; &amp; shared');
     expect(text).toContain('<code>up_&lt;a&gt;&amp;</code>');
+  });
+
+  it('shows the selected latest-reset window while keeping provider slots diagnostic', () => {
+    const upstream: UpstreamRecord = {
+      id: 'up_a',
+      kind: 'codex',
+      name: 'Codex',
+      enabled: true,
+      sort_order: 1,
+      created_at: '2026-07-01T00:00:00.000Z',
+      updated_at: '2026-07-01T00:00:00.000Z',
+      flag_overrides: {},
+      flag_defaults: {},
+      disabled_public_model_ids: [],
+      proxy_fallback_list: [],
+      model_prefix: null,
+      color: null,
+      config: {},
+      state: null,
+      codex_quota: {
+        plus: {
+          observed_at: '2026-07-01T01:00:00.000Z',
+          active_limit: 'premium',
+          primary_window_minutes: 300,
+          primary_reset_after_at: '2026-07-01T05:00:00.000Z',
+          primary_used_percent: 15,
+          secondary_window_minutes: 10_080,
+          secondary_reset_after_at: '2026-07-08T00:00:00.000Z',
+          secondary_used_percent: 75,
+        },
+      },
+    };
+
+    const list = formatUpstreamList([upstream]);
+    expect(list).toContain('quota <code>premium</code>: <b>75.0%</b> | resets <code>2026-07-08T00:00:00.000Z</code>');
+    expect(list).not.toContain('15.0%');
+
+    const detail = formatUpstreamDetail(upstream, [], null);
+    expect(detail).toContain('<b>Selected window</b>: <b>75.0%</b> | 10,080 min | resets <code>2026-07-08T00:00:00.000Z</code>');
+    expect(detail).toContain('<b>Primary slot</b>: <b>15.0%</b> | 300 min | resets <code>2026-07-01T05:00:00.000Z</code>');
+    expect(detail).toContain('<b>Secondary slot</b>: <b>75.0%</b> | 10,080 min | resets <code>2026-07-08T00:00:00.000Z</code>');
   });
 
   it('escapes generated key secrets, hides them, and keeps them copyable', () => {
@@ -72,6 +133,7 @@ describe('formatters', () => {
     expect(unbound).toContain('<code>/bind &lt;username&gt; &lt;password&gt;</code>');
 
     const binding: Binding = {
+      bindingId: 1,
       telegramUserId: 'tg1',
       flowayUserId: 7,
       username: 'alice <prod>&',
@@ -113,7 +175,7 @@ describe('formatters', () => {
     };
     const report: UsageQuotaEstimate = {
       window: {
-        label: 'Primary window',
+        label: 'Quota window',
         startAt: '2026-06-15T00:00:00.000Z',
         endAt: '2026-06-22T00:00:00.000Z',
         startHour: '2026-06-15T00',
@@ -133,7 +195,7 @@ describe('formatters', () => {
     expect(text).toContain('<b>Quota estimate</b>\n\n<b>Codex &lt;main&gt;&amp;</b>');
     expect(text).not.toContain('<code>up_a</code>');
     expect(text).toContain('Reset in ');
-    expect(text).toContain('<b>Upstream primary used</b>:\n[||||||||||||   ] <b>80.0%</b>');
+    expect(text).toContain('<b>Upstream quota used</b>:\n[||||||||||||   ] <b>80.0%</b>');
     expect(text).toContain('<b>Estimated your used</b>:\n[||||||||||||   ] <b>80.0%</b> of your equal share');
     expect(text).toContain('(Assumed 4 users)');
     expect(text).toContain('Actual per-user quota pressure depends on every upstream user');
@@ -162,7 +224,7 @@ describe('formatters', () => {
     };
     const report: UsageQuotaEstimate = {
       window: {
-        label: 'Primary window',
+        label: 'Quota window',
         startAt: '2026-06-15T00:00:00.000Z',
         endAt: '2026-06-22T00:00:00.000Z',
         startHour: '2026-06-15T00',
@@ -188,7 +250,7 @@ describe('formatters', () => {
   it('formats notification quota estimates without the command header or caveat', () => {
     const report: UsageQuotaEstimate = {
       window: {
-        label: 'Primary window',
+        label: 'Quota window',
         startAt: '2026-06-15T00:00:00.000Z',
         endAt: '2026-06-22T00:00:00.000Z',
         startHour: '2026-06-15T00',
@@ -207,47 +269,13 @@ describe('formatters', () => {
 
     const text = formatQuotaEstimateNotification(report);
 
-    expect(text).toContain('<b>Upstream primary used</b>:\n[|||            ] <b>18.0%</b>');
+    expect(text).toContain('<b>Upstream quota used</b>:\n[|||            ] <b>18.0%</b>');
     expect(text).toContain('<b>Estimated your used</b>:');
     expect(text).toContain('(Assumed 4 users)');
     expect(text).not.toContain('<b>Active limit</b>');
     expect(text).not.toContain('<b>Quota estimate</b>');
     expect(text).not.toContain('Reset in ');
     expect(text).not.toContain('Estimate only');
-  });
-
-  it('formats low-information quota estimates after a limit refresh', () => {
-    const upstream: UpstreamRecord = {
-      id: 'up_a',
-      kind: 'codex',
-      name: 'Codex main',
-      enabled: true,
-      sort_order: 1,
-      created_at: '2026-06-21T00:00:00.000Z',
-      updated_at: '2026-06-21T00:00:00.000Z',
-      flag_overrides: {},
-      flag_defaults: {},
-      disabled_public_model_ids: [],
-      proxy_fallback_list: [],
-      model_prefix: null,
-      color: null,
-      config: {},
-      state: null,
-    };
-
-    const text = formatQuotaEstimateInsufficient(
-      upstream,
-      {
-        label: 'Primary window',
-        startAt: '2026-06-15T00:00:00.000Z',
-        endAt: '2026-06-22T00:00:00.000Z',
-        startHour: '2026-06-15T00',
-        endHour: '2026-06-22T00',
-      },
-      0.4,
-    );
-    expect(text).toContain('<b>Upstream primary used</b>:\n[|              ] <b>0.40%</b>');
-    expect(text).toContain('Not enough usage data yet. The limit probably just reset, so go make some requests.');
   });
 
   it('formats leaderboard rows and escapes usernames', () => {
@@ -286,7 +314,7 @@ describe('formatters', () => {
     expect(text).not.toContain('tokens | $');
   });
 
-  it('formats primary window refresh notifications', () => {
+  it('formats quota window refresh notifications', () => {
     const upstream: UpstreamRecord = {
       id: 'up_a',
       kind: 'codex',
@@ -306,7 +334,7 @@ describe('formatters', () => {
     };
     const report: UsageWindowReport = {
       window: {
-        label: 'Primary window',
+        label: 'Quota window',
         startAt: '2026-06-15T00:00:00.000Z',
         endAt: '2026-06-22T00:00:00.000Z',
         startHour: '2026-06-15T00',
@@ -319,9 +347,9 @@ describe('formatters', () => {
       userRequestSharePercent: 25,
     };
 
-    const text = formatPrimaryWindowNotification(upstream, report, '<b>Quota estimate</b>');
+    const text = formatQuotaWindowNotification(upstream, report, '<b>Quota estimate</b>');
 
-    expect(text).toContain('<b>Primary window refreshed</b>');
+    expect(text).toContain('<b>Quota window refreshed</b>');
     expect(text).toContain('<b>Codex &lt;main&gt;&amp;</b> <code>up_a</code>');
     expect(text).toContain('<b>Your upstream tokens</b>: <b>100</b>');
     expect(text).toContain('<b>Requests</b>: <b>1</b> / 4');
@@ -329,7 +357,7 @@ describe('formatters', () => {
     expect(text).toContain('\n\n<b>Quota estimate</b>');
     expect(text).not.toContain('<b>Window note</b>');
 
-    const noted = formatPrimaryWindowNotification(upstream, report, '<b>Quota estimate</b>', 'Manual <refresh>&');
+    const noted = formatQuotaWindowNotification(upstream, report, '<b>Quota estimate</b>', 'Manual <refresh>&');
     expect(noted).toContain('<b>Window note</b>: Manual &lt;refresh&gt;&amp;');
   });
 });

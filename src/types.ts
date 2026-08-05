@@ -5,7 +5,7 @@ export interface AppConfig {
   botDbPath: string;
   botSecretKey: Buffer;
   usageExportCacheTtlSeconds: number;
-  primaryWindowNotifyIntervalSeconds: number;
+  quotaWindowNotifyIntervalSeconds: number;
 }
 
 export interface FlowayUser {
@@ -35,6 +35,7 @@ export interface LoginResponse {
 }
 
 export interface Binding {
+  bindingId: number;
   telegramUserId: string;
   flowayUserId: number;
   username: string;
@@ -66,6 +67,9 @@ export interface CodexQuotaSnapshot {
   primary_used_percent?: number;
   primary_window_minutes?: number;
   primary_reset_after_at?: string;
+  secondary_used_percent?: number;
+  secondary_window_minutes?: number;
+  secondary_reset_after_at?: string;
   credits_has_credits?: boolean;
   credits_balance?: number;
   ratelimited_until?: string;

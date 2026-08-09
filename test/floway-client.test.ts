@@ -55,6 +55,39 @@ describe('FlowayClient', () => {
     expect(upstreamCalls.map(call => call.headers.get('x-floway-session'))).toEqual(['admin-session-1', 'admin-session-2']);
   });
 
+  it('preserves primary and secondary Codex quota wire fields', async () => {
+    const record: UpstreamRecord = {
+      ...upstream('up_a', 'codex'),
+      codex_quota: {
+        plus: {
+          observed_at: '2026-07-01T01:00:00.000Z',
+          active_limit: 'premium',
+          primary_window_minutes: 300,
+          primary_reset_after_at: '2026-07-01T05:00:00.000Z',
+          primary_used_percent: 15,
+          secondary_window_minutes: 10_080,
+          secondary_reset_after_at: '2026-07-08T00:00:00.000Z',
+          secondary_used_percent: 75,
+        },
+      },
+    };
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith('/auth/login')) {
+        return jsonResponse({ token: 'admin-session', user: { id: 1, username: 'admin', isAdmin: true, upstreamIds: null } });
+      }
+      return jsonResponse([record]);
+    };
+    const client = new FlowayClient({
+      baseUrl: 'https://floway.example',
+      adminKey: 'admin-secret',
+      usageExportCacheTtlSeconds: 30,
+      fetchImpl,
+    });
+
+    expect(await client.listUpstreams()).toEqual([record]);
+  });
+
   it('sanitizes exported api key secrets and caches the raw export briefly', async () => {
     let exportCalls = 0;
     const fetchImpl: typeof fetch = async (input) => {
@@ -125,6 +158,43 @@ describe('FlowayClient', () => {
       requests: 1,
       metrics: [{ metric: 'input_tokens', quantity: '10', unitPrice: '0.000001' }],
     });
+  });
+
+  it('rejects malformed successful response shapes without exposing payload values', async () => {
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith('/auth/login')) {
+        return jsonResponse({ token: 'admin-session', user: { id: 1, username: 'admin', isAdmin: true, upstreamIds: null } });
+      }
+      return jsonResponse([{ id: 'secret-upstream', kind: 'codex' }]);
+    };
+    const client = new FlowayClient({
+      baseUrl: 'https://floway.example',
+      adminKey: 'admin-secret',
+      usageExportCacheTtlSeconds: 30,
+      fetchImpl,
+    });
+
+    await expect(client.listUpstreams()).rejects.toThrow('Invalid Floway upstream 0');
+    await expect(client.listUpstreams()).rejects.not.toThrow('secret-upstream');
+  });
+
+  it('rejects malformed export envelopes before mapping nested arrays', async () => {
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith('/auth/login')) {
+        return jsonResponse({ token: 'admin-session', user: { id: 1, username: 'admin', isAdmin: true, upstreamIds: null } });
+      }
+      return jsonResponse({ version: 17, exportedAt: 'x', data: { users: 'not-an-array' } });
+    };
+    const client = new FlowayClient({
+      baseUrl: 'https://floway.example',
+      adminKey: 'admin-secret',
+      usageExportCacheTtlSeconds: 30,
+      fetchImpl,
+    });
+
+    await expect(client.exportUsageSnapshot()).rejects.toThrow('Invalid Floway export response');
   });
 
   it('fetches a full upstream record and posts it to model and Copilot quota actions', async () => {

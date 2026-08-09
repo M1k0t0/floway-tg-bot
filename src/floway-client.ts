@@ -41,19 +41,19 @@ export class FlowayClient {
   }
 
   async login(username: string, password: string): Promise<LoginResponse> {
-    return await this.request<LoginResponse>('/auth/login', {
+    return validateLoginResponse(await this.request<unknown>('/auth/login', {
       method: 'POST',
       body: { username, password },
       secretHints: [password, this.options.adminKey],
-    });
+    }));
   }
 
   async getMe(session: string): Promise<AuthMeResponse> {
-    return await this.userRequest<AuthMeResponse>(session, '/auth/me');
+    return validateAuthMeResponse(await this.userRequest<unknown>(session, '/auth/me'));
   }
 
   async listUsers(): Promise<FlowayAdminUser[]> {
-    return await this.adminRequest<FlowayAdminUser[]>('/api/users');
+    return validateAdminUsers(await this.adminRequest<unknown>('/api/users'));
   }
 
   async logout(session: string): Promise<{ ok: true }> {
@@ -83,11 +83,11 @@ export class FlowayClient {
   }
 
   async listUpstreams(): Promise<UpstreamRecord[]> {
-    return await this.adminRequest<UpstreamRecord[]>('/api/upstreams');
+    return validateUpstreams(await this.adminRequest<unknown>('/api/upstreams'));
   }
 
   async getUpstream(id: string): Promise<UpstreamRecord> {
-    return await this.adminRequest<UpstreamRecord>(`/api/upstreams/${encodeURIComponent(id)}`);
+    return validateUpstream(await this.adminRequest<unknown>(`/api/upstreams/${encodeURIComponent(id)}`));
   }
 
   async getUpstreamModels(record: UpstreamRecord): Promise<UpstreamModelsResponse> {
@@ -118,7 +118,7 @@ export class FlowayClient {
     const now = Date.now();
     if (this.exportCache && this.exportCache.expiresAt > now) return this.exportCache.snapshot;
 
-    const payload = await this.adminRequest<FlowayExportPayload>('/api/export');
+    const payload = validateExportPayload(await this.adminRequest<unknown>('/api/export'));
     const snapshot: SanitizedExportSnapshot = {
       exportedAt: payload.exportedAt,
       users: payload.data.users.map(user => ({
@@ -246,6 +246,117 @@ export class FlowayClient {
     return parsed as T;
   }
 }
+
+const validateLoginResponse = (value: unknown): LoginResponse => {
+  const record = requireRecord(value, 'login response');
+  if (typeof record.token !== 'string' || record.token.length === 0) throw invalidResponse('login response');
+  return { token: record.token, user: validateFlowayUser(record.user, 'login user') };
+};
+
+const validateAuthMeResponse = (value: unknown): AuthMeResponse => {
+  const record = requireRecord(value, 'session response');
+  if (typeof record.viaApiKey !== 'boolean') throw invalidResponse('session response');
+  validateFlowayUser(record.user, 'session user');
+  if (record.apiKey !== null) {
+    const apiKey = requireRecord(record.apiKey, 'session API key');
+    if (typeof apiKey.id !== 'string' || typeof apiKey.name !== 'string') throw invalidResponse('session API key');
+  }
+  return value as AuthMeResponse;
+};
+
+const validateAdminUsers = (value: unknown): FlowayAdminUser[] => {
+  if (!Array.isArray(value)) throw invalidResponse('users response');
+  return value.map((item, index) => {
+    const user = validateFlowayUser(item, `user ${index}`);
+    const record = item as Record<string, unknown>;
+    if (typeof record.createdAt !== 'string') throw invalidResponse(`user ${index}`);
+    return { ...user, createdAt: record.createdAt };
+  });
+};
+
+const validateFlowayUser = (value: unknown, label: string): FlowayAdminUser => {
+  const record = requireRecord(value, label);
+  if (!Number.isSafeInteger(record.id) || (record.id as number) < 1
+    || typeof record.username !== 'string'
+    || typeof record.isAdmin !== 'boolean'
+    || !(record.upstreamIds === null
+      || (Array.isArray(record.upstreamIds) && record.upstreamIds.every(id => typeof id === 'string')))) {
+    throw invalidResponse(label);
+  }
+  return record as unknown as FlowayAdminUser;
+};
+
+const validateUpstreams = (value: unknown): UpstreamRecord[] => {
+  if (!Array.isArray(value)) throw invalidResponse('upstreams response');
+  return value.map((item, index) => validateUpstream(item, `upstream ${index}`));
+};
+
+const validateUpstream = (value: unknown, label = 'upstream response'): UpstreamRecord => {
+  const record = requireRecord(value, label);
+  if (typeof record.id !== 'string' || record.id.length === 0
+    || typeof record.kind !== 'string'
+    || typeof record.name !== 'string'
+    || typeof record.enabled !== 'boolean'
+    || !Number.isSafeInteger(record.sort_order)
+    || typeof record.created_at !== 'string'
+    || typeof record.updated_at !== 'string'
+    || !isRecord(record.flag_overrides)
+    || !isRecord(record.flag_defaults)
+    || !isStringArray(record.disabled_public_model_ids)
+    || !Array.isArray(record.proxy_fallback_list)) {
+    throw invalidResponse(label);
+  }
+  return record as unknown as UpstreamRecord;
+};
+
+const validateExportPayload = (value: unknown): FlowayExportPayload => {
+  const payload = requireRecord(value, 'export response');
+  const data = requireRecord(payload.data, 'export data');
+  if (payload.version !== 17
+    || typeof payload.exportedAt !== 'string'
+    || !Array.isArray(data.users)
+    || !Array.isArray(data.apiKeys)
+    || !Array.isArray(data.upstreams)
+    || !Array.isArray(data.usage)) {
+    throw invalidResponse('export response');
+  }
+  data.users.forEach((item, index) => {
+    const user = requireRecord(item, `export user ${index}`);
+    if (!Number.isSafeInteger(user.id) || typeof user.username !== 'string'
+      || !(user.deletedAt === null || typeof user.deletedAt === 'string')) throw invalidResponse(`export user ${index}`);
+  });
+  data.apiKeys.forEach((item, index) => {
+    const key = requireRecord(item, `export API key ${index}`);
+    if (typeof key.id !== 'string' || !Number.isSafeInteger(key.userId) || typeof key.name !== 'string'
+      || typeof key.createdAt !== 'string' || !Array.isArray(key.upstreamIds) && key.upstreamIds !== null) {
+      throw invalidResponse(`export API key ${index}`);
+    }
+  });
+  data.usage.forEach((item, index) => {
+    const usage = requireRecord(item, `usage record ${index}`);
+    if (typeof usage.keyId !== 'string' || typeof usage.model !== 'string'
+      || !(usage.upstream === null || typeof usage.upstream === 'string')
+      || typeof usage.modelKey !== 'string' || typeof usage.hour !== 'string'
+      || !Number.isSafeInteger(usage.requests) || !Array.isArray(usage.metrics)
+      || !isRecord(usage.pricingSelector)) {
+      throw invalidResponse(`usage record ${index}`);
+    }
+  });
+  return value as FlowayExportPayload;
+};
+
+const requireRecord = (value: unknown, label: string): Record<string, unknown> => {
+  if (!isRecord(value)) throw invalidResponse(label);
+  return value;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isStringArray = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every(item => typeof item === 'string');
+
+const invalidResponse = (label: string): TypeError => new TypeError(`Invalid Floway ${label}`);
 
 interface ApiRequestInit {
   method?: string;

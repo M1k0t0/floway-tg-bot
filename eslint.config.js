@@ -14,6 +14,8 @@ export default [
         sourceType: 'module'
       },
       globals: {
+        AbortController: 'readonly',
+        AbortSignal: 'readonly',
         Buffer: 'readonly',
         console: 'readonly',
         fetch: 'readonly',
@@ -22,6 +24,7 @@ export default [
         Response: 'readonly',
         ResponseInit: 'readonly',
         clearInterval: 'readonly',
+        clearTimeout: 'readonly',
         setInterval: 'readonly',
         setTimeout: 'readonly',
         URLSearchParams: 'readonly'

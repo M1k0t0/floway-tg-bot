@@ -276,8 +276,12 @@ const parseWindowSlot = (
     return { status: 'absent' };
   }
 
-  const end = parseRfc3339(resetAt);
-  if (minutes === 0 && usedPercent === 0 && end?.ms === observedAtMs) {
+  const end = resetAt === undefined ? null : parseRfc3339(resetAt);
+  if (
+    minutes === 0
+    && usedPercent === 0
+    && (resetAt === undefined || end?.ms === observedAtMs)
+  ) {
     return { status: 'absent' };
   }
   if (

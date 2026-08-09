@@ -52,9 +52,9 @@ has a minimum 24-hour lifetime from `observed_at`; future primary, secondary, or
 rate-limit reset horizons can extend that lifetime. The bot then selects the
 fresh Floway snapshot whose `active_limit` is `premium`; other active-limit
 snapshots are intentionally ignored. Within that premium snapshot, the bot
-treats a fully populated zero-minute, zero-percent slot whose reset matches
-`observed_at` as absent. It parses the remaining `primary_*` and `secondary_*`
-fields as provider slots and selects the valid window whose `reset_after_at` is
+treats a fully populated zero-minute, zero-percent slot as absent when its reset
+is omitted or matches `observed_at`. It parses the remaining `primary_*` and
+`secondary_*` fields as provider slots and selects the valid window whose `reset_after_at` is
 latest. The slot label does not define the reporting period, so moving the same
 window between primary and secondary does not create a refresh.
 

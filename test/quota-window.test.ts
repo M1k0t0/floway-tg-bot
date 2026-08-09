@@ -168,6 +168,12 @@ describe('resolveQuotaWindowObservation', () => {
       secondary_reset_after_at: observedAt,
       secondary_used_percent: 0,
     });
+    const primaryWithoutSecondaryReset = snapshot(observedAt, '2026-07-08T00:00:00Z', {
+      primary_window_minutes: 10_080,
+      primary_used_percent: 11,
+      secondary_window_minutes: 0,
+      secondary_used_percent: 0,
+    });
     const secondaryWindow: CodexQuotaSnapshot = {
       observed_at: observedAt,
       active_limit: 'premium',
@@ -182,6 +188,10 @@ describe('resolveQuotaWindowObservation', () => {
     expect(resolveQuotaWindowObservation(upstream({ plus: primaryWindow }))).toMatchObject({
       status: 'valid',
       observation: { durationMs: 60 * 60_000, usedPercent: 25 },
+    });
+    expect(resolveQuotaWindowObservation(upstream({ plus: primaryWithoutSecondaryReset }))).toMatchObject({
+      status: 'valid',
+      observation: { durationMs: 10_080 * 60_000, usedPercent: 11 },
     });
     expect(resolveQuotaWindowObservation(upstream({ plus: secondaryWindow }))).toMatchObject({
       status: 'valid',

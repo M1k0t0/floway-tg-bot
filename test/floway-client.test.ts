@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { FlowayClient, FlowayHttpError } from '../src/floway-client.js';
 import type { UpstreamRecord } from '../src/types.js';
@@ -16,7 +16,7 @@ const upstream = (id: string, kind = 'copilot'): UpstreamRecord => ({
   disabled_public_model_ids: [],
   proxy_fallback_list: [],
   model_prefix: null,
-  color: null,
+  hue: 0,
   config: { githubToken: 'github-secret' },
   state: { copilotToken: 'copilot-secret' },
 });
@@ -88,6 +88,99 @@ describe('FlowayClient', () => {
     expect(await client.listUpstreams()).toEqual([record]);
   });
 
+  it('filters Codex quota snapshots with the Floway TTL while preserving malformed data', async () => {
+    const now = Date.parse('2026-07-10T12:00:00.000Z');
+    const freshAtFloor = {
+      observed_at: '2026-07-09T12:00:00.000Z',
+      active_limit: 'premium',
+      primary_window_minutes: 300,
+      primary_reset_after_at: '2026-07-09T17:00:00.000Z',
+      primary_used_percent: 15,
+    };
+    const keptByFutureHorizon = {
+      observed_at: '2026-07-08T12:00:00.000Z',
+      active_limit: 'premium',
+      primary_window_minutes: 300,
+      primary_reset_after_at: '2026-07-13T12:00:00.000Z',
+      primary_used_percent: 25,
+    };
+    const stale = {
+      observed_at: '2026-07-08T12:00:00.000Z',
+      active_limit: 'premium',
+      primary_window_minutes: 300,
+      primary_reset_after_at: '2026-07-08T17:00:00.000Z',
+      primary_used_percent: 35,
+    };
+    const malformed = {
+      observed_at: 'bad',
+      active_limit: 'premium',
+      primary_window_minutes: 300,
+      primary_reset_after_at: 'bad',
+      primary_used_percent: 45,
+    };
+    const record: UpstreamRecord = {
+      ...upstream('up_a', 'codex'),
+      codex_quota: { freshAtFloor, keptByFutureHorizon, stale, malformed },
+    };
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith('/auth/login')) {
+        return jsonResponse({ token: 'admin-session', user: { id: 1, username: 'admin', isAdmin: true, upstreamIds: null } });
+      }
+      return jsonResponse(url.endsWith('/api/upstreams/up_a') ? record : [record]);
+    };
+    const client = new FlowayClient({
+      baseUrl: 'https://floway.example',
+      adminKey: 'admin-secret',
+      usageExportCacheTtlSeconds: 30,
+      fetchImpl,
+    });
+
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(now);
+    try {
+      const expectedQuota = { freshAtFloor, keptByFutureHorizon, malformed };
+      expect((await client.listUpstreams())[0]?.codex_quota).toEqual(expectedQuota);
+      expect((await client.getUpstream('up_a')).codex_quota).toEqual(expectedQuota);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('maps a fully expired Codex quota map to null', async () => {
+    const record: UpstreamRecord = {
+      ...upstream('up_a', 'codex'),
+      codex_quota: {
+        premium: {
+          observed_at: '2026-07-08T12:00:00.000Z',
+          active_limit: 'premium',
+          primary_window_minutes: 300,
+          primary_reset_after_at: '2026-07-08T17:00:00.000Z',
+          primary_used_percent: 35,
+        },
+      },
+    };
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith('/auth/login')) {
+        return jsonResponse({ token: 'admin-session', user: { id: 1, username: 'admin', isAdmin: true, upstreamIds: null } });
+      }
+      return jsonResponse([record]);
+    };
+    const client = new FlowayClient({
+      baseUrl: 'https://floway.example',
+      adminKey: 'admin-secret',
+      usageExportCacheTtlSeconds: 30,
+      fetchImpl,
+    });
+
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-07-10T12:00:00.000Z'));
+    try {
+      expect((await client.listUpstreams())[0]?.codex_quota).toBeNull();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('sanitizes exported api key secrets and caches the raw export briefly', async () => {
     let exportCalls = 0;
     const fetchImpl: typeof fetch = async (input) => {
@@ -97,7 +190,7 @@ describe('FlowayClient', () => {
       }
       exportCalls += 1;
       return jsonResponse({
-        version: 17,
+        version: 20,
         exportedAt: '2026-06-21T00:00:00.000Z',
         data: {
           users: [{ id: 1, username: 'admin', deletedAt: null }],
@@ -185,7 +278,7 @@ describe('FlowayClient', () => {
       if (url.endsWith('/auth/login')) {
         return jsonResponse({ token: 'admin-session', user: { id: 1, username: 'admin', isAdmin: true, upstreamIds: null } });
       }
-      return jsonResponse({ version: 17, exportedAt: 'x', data: { users: 'not-an-array' } });
+      return jsonResponse({ version: 20, exportedAt: 'x', data: { users: 'not-an-array' } });
     };
     const client = new FlowayClient({
       baseUrl: 'https://floway.example',

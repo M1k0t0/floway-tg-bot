@@ -34,7 +34,7 @@ const upstream = (id: string): UpstreamRecord => ({
   disabled_public_model_ids: [],
   proxy_fallback_list: [],
   model_prefix: null,
-  color: null,
+  hue: 0,
   config: {},
   state: null,
 });

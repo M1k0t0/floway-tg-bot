@@ -90,6 +90,11 @@ quota window advances.
 
 Important invariants:
 
+- Hide Codex quota snapshots outside their freshness period before commands or
+  notifier polling consume upstream records. Use `observed_at` as the snapshot
+  age origin, a minimum 24-hour TTL, and any longer positive horizon to the
+  primary reset, secondary reset, or rate-limit end. Keep malformed snapshots
+  for the quota parser to reject explicitly rather than treating them as expired.
 - Resolve the `premium` active-limit snapshot independently from provider window
   slots. Treat a fully populated zero-minute, zero-percent slot whose reset matches
   `observed_at` as absent; otherwise parse both `primary_*` and `secondary_*`

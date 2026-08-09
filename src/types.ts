@@ -94,7 +94,7 @@ export interface UpstreamRecord {
     addressable?: string[];
     listed?: string[];
   } | null;
-  color: string | null;
+  hue: number;
   config: unknown;
   state: unknown;
   modelsCache?: ModelsCacheStatus;
@@ -201,7 +201,7 @@ export type SanitizedExportApiKey = Pick<
 >;
 
 export interface FlowayExportPayload {
-  version: 17;
+  version: number;
   exportedAt: string;
   data: {
     users: Array<{ id: number; username: string; deletedAt: string | null }>;

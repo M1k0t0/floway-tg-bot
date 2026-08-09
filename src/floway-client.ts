@@ -2,6 +2,7 @@ import { redactText, redactValue } from './redact.js';
 import type {
   ApiKeyRecord,
   AuthMeResponse,
+  CodexQuotaSnapshot,
   CopilotQuotaResponse,
   FlowayAdminUser,
   FlowayExportPayload,
@@ -83,11 +84,16 @@ export class FlowayClient {
   }
 
   async listUpstreams(): Promise<UpstreamRecord[]> {
-    return validateUpstreams(await this.adminRequest<unknown>('/api/upstreams'));
+    const upstreams = validateUpstreams(await this.adminRequest<unknown>('/api/upstreams'));
+    const nowMs = Date.now();
+    return upstreams.map(upstream => filterStaleCodexQuota(upstream, nowMs));
   }
 
   async getUpstream(id: string): Promise<UpstreamRecord> {
-    return validateUpstream(await this.adminRequest<unknown>(`/api/upstreams/${encodeURIComponent(id)}`));
+    const upstream = validateUpstream(
+      await this.adminRequest<unknown>(`/api/upstreams/${encodeURIComponent(id)}`),
+    );
+    return filterStaleCodexQuota(upstream, Date.now());
   }
 
   async getUpstreamModels(record: UpstreamRecord): Promise<UpstreamModelsResponse> {
@@ -309,10 +315,57 @@ const validateUpstream = (value: unknown, label = 'upstream response'): Upstream
   return record as unknown as UpstreamRecord;
 };
 
+const CODEX_QUOTA_TTL_FLOOR_MS = 24 * 60 * 60 * 1000;
+const CODEX_QUOTA_HORIZON_FIELDS = [
+  'primary_reset_after_at',
+  'secondary_reset_after_at',
+  'ratelimited_until',
+] as const satisfies readonly (keyof CodexQuotaSnapshot)[];
+
+const filterStaleCodexQuota = (upstream: UpstreamRecord, nowMs: number): UpstreamRecord => {
+  if (upstream.kind !== 'codex' || !isRecord(upstream.codex_quota)) return upstream;
+
+  const entries = Object.entries(upstream.codex_quota).filter(([, snapshot]) =>
+    codexQuotaSnapshotIsFresh(snapshot, nowMs) !== false);
+  if (entries.length === Object.keys(upstream.codex_quota).length && entries.length > 0) return upstream;
+
+  return {
+    ...upstream,
+    codex_quota: entries.length > 0
+      ? Object.fromEntries(entries) as Record<string, CodexQuotaSnapshot>
+      : null,
+  };
+};
+
+const codexQuotaSnapshotIsFresh = (value: unknown, nowMs: number): boolean | null => {
+  if (!isRecord(value)) return null;
+  const observedAtMs = quotaTimestampMs(value.observed_at);
+  if (observedAtMs === null) return null;
+
+  const horizons: number[] = [];
+  for (const field of CODEX_QUOTA_HORIZON_FIELDS) {
+    const timestamp = value[field];
+    if (timestamp === undefined || timestamp === null) continue;
+    const resetAtMs = quotaTimestampMs(timestamp);
+    if (resetAtMs === null) return null;
+    const horizonMs = resetAtMs - nowMs;
+    if (horizonMs > 0) horizons.push(horizonMs);
+  }
+
+  const ttlMs = Math.max(CODEX_QUOTA_TTL_FLOOR_MS, ...horizons);
+  return nowMs - observedAtMs <= ttlMs;
+};
+
+const quotaTimestampMs = (value: unknown): number | null => {
+  if (typeof value !== 'string' || value.length === 0) return null;
+  const timestampMs = new Date(value).getTime();
+  return Number.isFinite(timestampMs) ? timestampMs : null;
+};
+
 const validateExportPayload = (value: unknown): FlowayExportPayload => {
   const payload = requireRecord(value, 'export response');
   const data = requireRecord(payload.data, 'export data');
-  if (payload.version !== 17
+  if (!Number.isSafeInteger(payload.version) || (payload.version as number) < 20
     || typeof payload.exportedAt !== 'string'
     || !Array.isArray(data.users)
     || !Array.isArray(data.apiKeys)

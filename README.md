@@ -3,6 +3,8 @@
 Telegram bot for Floway users to bind their Floway account, manage their own
 API keys, inspect upstreams, and view Codex quota-window usage.
 
+The minimum supported Floway admin export version is **20**.
+
 ## Setup
 
 ```bash

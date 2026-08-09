@@ -85,7 +85,12 @@ describe('FlowayClient', () => {
       fetchImpl,
     });
 
-    expect(await client.listUpstreams()).toEqual([record]);
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-07-01T01:00:00.000Z'));
+    try {
+      expect(await client.listUpstreams()).toEqual([record]);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it('filters Codex quota snapshots with the Floway TTL while preserving malformed data', async () => {

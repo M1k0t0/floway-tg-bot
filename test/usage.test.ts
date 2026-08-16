@@ -214,7 +214,7 @@ describe('user usage scope', () => {
 
   it('derives independent snapshots from the requesting user upstream access', () => {
     const globalSnapshot = snapshot();
-    const original = structuredClone(globalSnapshot);
+    const original = JSON.parse(JSON.stringify(globalSnapshot)) as GlobalUsageSnapshot;
 
     const upA = scopeUsageSnapshotForUser(globalSnapshot, { upstreamIds: ['up_a', 'up_a', 'unknown'] });
     const upB = scopeUsageSnapshotForUser(globalSnapshot, { upstreamIds: ['up_b'] });

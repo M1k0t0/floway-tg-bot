@@ -25,13 +25,14 @@ import { resolveQuotaWindowObservation, type QuotaWindowResolution } from './quo
 import {
   canShareUpstreamQuota,
   quotaObservationToUsageWindow,
+  scopeUsageSnapshotForUser,
   summarizeUsageLeaderboard,
   summarizeUsageQuotaEstimate,
   summarizeUsageWindow,
   type LeaderboardDays,
   type UsageWindowReport,
 } from './usage.js';
-import type { AppConfig, Binding, FlowayUser, UpstreamRecord } from './types.js';
+import type { AppConfig, Binding, FlowayUser, GlobalUsageSnapshot, UpstreamRecord } from './types.js';
 
 export { canShareUpstreamQuota } from './usage.js';
 
@@ -340,8 +341,9 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
     if (!bound) return;
 
     try {
-      const exportSnapshot = await floway.exportUsageSnapshot();
-      await replyLong(ctx, formatUsageLeaderboard(summarizeUsageLeaderboard(exportSnapshot, parsed.days, 4, new Date(), bound.user.upstreamIds)));
+      const globalSnapshot = await floway.exportUsageSnapshot();
+      const userSnapshot = scopeUsageSnapshotForUser(globalSnapshot, bound.user);
+      await replyLong(ctx, formatUsageLeaderboard(summarizeUsageLeaderboard(userSnapshot, parsed.days, 4)));
     } catch (error) {
       await replyError(ctx, 'Failed to load leaderboard', error);
     }
@@ -611,7 +613,7 @@ const formatQuotaWindowQuotaEstimate = (
   upstream: UpstreamRecord,
   quotaWindow: ReturnType<typeof quotaObservationToUsageWindow>,
   usedPercent: number | undefined,
-  exportSnapshot: Parameters<typeof summarizeUsageWindow>[3],
+  exportSnapshot: GlobalUsageSnapshot,
   users: Awaited<ReturnType<FlowayClient['listUsers']>>,
 ): string => {
   if (usedPercent === undefined) return formatQuotaEstimateNotification(null);

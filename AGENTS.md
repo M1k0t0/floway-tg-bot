@@ -17,6 +17,10 @@
   without running any test, lint, or typecheck first. Verification belongs to
   the completion and merge-to-main gate, not to each in-flight worktree
   commit.
+- When adding tests for a new feature, add dedicated test cases rather than
+  repurposing existing tests that cover other behavior. Preserve each existing
+  test's original intent and regression coverage; sharing neutral setup helpers
+  is fine.
 - This file describes only the current system. Removed concepts must not
   appear anywhere in the repo: code, comments, tests, docs, this file
   included. Do not write notes that name dead concepts; their absence from

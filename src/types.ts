@@ -75,30 +75,16 @@ export interface CodexQuotaSnapshot {
   ratelimited_until?: string;
 }
 
-export type CodexQuotaSnapshotMap = Record<string, CodexQuotaSnapshot>;
-
 export interface UpstreamRecord {
   id: string;
   kind: string;
   name: string;
   enabled: boolean;
   sort_order: number;
-  created_at: string;
   updated_at: string;
-  flag_overrides: Record<string, boolean>;
-  flag_defaults: Record<string, boolean>;
-  disabled_public_model_ids: string[];
-  proxy_fallback_list: Array<{ id: string; colos?: string[] }>;
-  model_prefix: {
-    prefix: string;
-    addressable?: string[];
-    listed?: string[];
-  } | null;
-  hue: number;
-  config: unknown;
-  state: unknown;
   modelsCache?: ModelsCacheStatus;
-  codex_quota?: CodexQuotaSnapshotMap | null;
+  codex_quota: unknown;
+  raw: Record<string, unknown>;
 }
 
 export interface UpstreamModelRecord {
@@ -206,7 +192,7 @@ export interface FlowayExportPayload {
   data: {
     users: Array<{ id: number; username: string; deletedAt: string | null }>;
     apiKeys: ExportApiKey[];
-    upstreams: UpstreamRecord[];
+    upstreams: unknown[];
     usage: UsageRecord[];
   };
 }

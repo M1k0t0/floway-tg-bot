@@ -96,17 +96,17 @@ export class FlowayClient {
     return filterStaleCodexQuota(upstream, Date.now());
   }
 
-  async getUpstreamModels(record: UpstreamRecord): Promise<UpstreamModelsResponse> {
+  async getUpstreamModels(upstream: UpstreamRecord): Promise<UpstreamModelsResponse> {
     return await this.adminRequest<UpstreamModelsResponse>('/api/upstreams/list-models', {
       method: 'POST',
-      body: { record },
+      body: { record: upstream.raw },
     });
   }
 
-  async getCopilotQuota(record: UpstreamRecord): Promise<CopilotQuotaResponse> {
+  async getCopilotQuota(upstream: UpstreamRecord): Promise<CopilotQuotaResponse> {
     return await this.adminRequest<CopilotQuotaResponse>('/api/upstreams/copilot/quota', {
       method: 'POST',
-      body: { record },
+      body: { record: upstream.raw },
     });
   }
 
@@ -300,19 +300,44 @@ const validateUpstreams = (value: unknown): UpstreamRecord[] => {
 const validateUpstream = (value: unknown, label = 'upstream response'): UpstreamRecord => {
   const record = requireRecord(value, label);
   if (typeof record.id !== 'string' || record.id.length === 0
-    || typeof record.kind !== 'string'
+    || typeof record.kind !== 'string' || record.kind.length === 0
     || typeof record.name !== 'string'
     || typeof record.enabled !== 'boolean'
     || !Number.isSafeInteger(record.sort_order)
-    || typeof record.created_at !== 'string'
-    || typeof record.updated_at !== 'string'
-    || !isRecord(record.flag_overrides)
-    || !isRecord(record.flag_defaults)
-    || !isStringArray(record.disabled_public_model_ids)
-    || !Array.isArray(record.proxy_fallback_list)) {
+    || typeof record.updated_at !== 'string') {
     throw invalidResponse(label);
   }
-  return record as unknown as UpstreamRecord;
+
+  const modelsCache = parseModelsCache(record.modelsCache);
+  return {
+    id: record.id,
+    kind: record.kind,
+    name: record.name,
+    enabled: record.enabled,
+    sort_order: record.sort_order as number,
+    updated_at: record.updated_at,
+    ...(modelsCache ? { modelsCache } : {}),
+    codex_quota: record.codex_quota,
+    raw: record,
+  };
+};
+
+const parseModelsCache = (value: unknown): UpstreamRecord['modelsCache'] => {
+  if (!isRecord(value)
+    || !(value.fetchedAt === null || Number.isFinite(value.fetchedAt))) return undefined;
+
+  if (value.lastError === null) return { fetchedAt: value.fetchedAt as number | null, lastError: null };
+  if (!isRecord(value.lastError)
+    || typeof value.lastError.message !== 'string'
+    || !Number.isFinite(value.lastError.at)) return undefined;
+
+  return {
+    fetchedAt: value.fetchedAt as number | null,
+    lastError: {
+      message: value.lastError.message,
+      at: value.lastError.at as number,
+    },
+  };
 };
 
 const CODEX_QUOTA_TTL_FLOOR_MS = 24 * 60 * 60 * 1000;
@@ -332,7 +357,7 @@ const filterStaleCodexQuota = (upstream: UpstreamRecord, nowMs: number): Upstrea
   return {
     ...upstream,
     codex_quota: entries.length > 0
-      ? Object.fromEntries(entries) as Record<string, CodexQuotaSnapshot>
+      ? Object.fromEntries(entries)
       : null,
   };
 };
@@ -405,9 +430,6 @@ const requireRecord = (value: unknown, label: string): Record<string, unknown> =
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
-
-const isStringArray = (value: unknown): value is string[] =>
-  Array.isArray(value) && value.every(item => typeof item === 'string');
 
 const invalidResponse = (label: string): TypeError => new TypeError(`Invalid Floway ${label}`);
 

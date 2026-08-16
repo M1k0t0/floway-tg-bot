@@ -14,7 +14,7 @@ import { QuotaWindowNotifier } from '../src/quota-window-notifier.js';
 import type {
   AuthMeResponse,
   FlowayAdminUser,
-  SanitizedExportSnapshot,
+  GlobalUsageSnapshot,
   UpstreamRecord,
 } from '../src/types.js';
 
@@ -31,7 +31,7 @@ const ADMIN_USERS: FlowayAdminUser[] = [
   { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-01T00:00:00.000Z' },
 ];
 
-const EMPTY_SNAPSHOT: SanitizedExportSnapshot = {
+const EMPTY_SNAPSHOT: GlobalUsageSnapshot = {
   exportedAt: '2026-06-01T05:05:00.000Z',
   users: [{ id: 7, username: 'alice', deletedAt: null }],
   apiKeys: [{

@@ -6,8 +6,9 @@ import type {
   CopilotQuotaResponse,
   FlowayAdminUser,
   FlowayExportPayload,
+  GlobalUsageSnapshot,
   LoginResponse,
-  SanitizedExportSnapshot,
+  PricingSelector,
   TokenUsageResponse,
   UpstreamModelsResponse,
   UpstreamRecord,
@@ -34,7 +35,7 @@ export class FlowayHttpError extends Error {
 export class FlowayClient {
   private adminSession: string | null = null;
   private adminLoginPromise: Promise<string> | null = null;
-  private exportCache: { expiresAt: number; snapshot: SanitizedExportSnapshot } | null = null;
+  private globalExportCache: { expiresAt: number; snapshot: GlobalUsageSnapshot } | null = null;
   private readonly fetchImpl: typeof fetch;
 
   constructor(private readonly options: FlowayClientOptions) {
@@ -120,12 +121,12 @@ export class FlowayClient {
     return await this.userRequest<TokenUsageResponse>(session, `/api/token-usage?${query.toString()}`);
   }
 
-  async exportUsageSnapshot(): Promise<SanitizedExportSnapshot> {
+  async exportUsageSnapshot(): Promise<GlobalUsageSnapshot> {
     const now = Date.now();
-    if (this.exportCache && this.exportCache.expiresAt > now) return this.exportCache.snapshot;
+    if (this.globalExportCache && this.globalExportCache.expiresAt > now) return this.globalExportCache.snapshot;
 
     const payload = validateExportPayload(await this.adminRequest<unknown>('/api/export'));
-    const snapshot: SanitizedExportSnapshot = {
+    const snapshot: GlobalUsageSnapshot = {
       exportedAt: payload.exportedAt,
       users: payload.data.users.map(user => ({
         id: user.id,
@@ -138,7 +139,7 @@ export class FlowayClient {
         name: apiKey.name,
         createdAt: apiKey.createdAt,
         ...(apiKey.lastUsedAt !== undefined ? { lastUsedAt: apiKey.lastUsedAt } : {}),
-        upstreamIds: apiKey.upstreamIds,
+        upstreamIds: apiKey.upstreamIds === null ? null : [...apiKey.upstreamIds],
         deletedAt: apiKey.deletedAt,
         dumpRetentionSeconds: apiKey.dumpRetentionSeconds,
         responsesRetentionSeconds: apiKey.responsesRetentionSeconds,
@@ -149,12 +150,12 @@ export class FlowayClient {
         upstream: record.upstream,
         modelKey: record.modelKey,
         hour: record.hour,
-        pricingSelector: { ...record.pricingSelector },
+        pricingSelector: clonePricingSelector(record.pricingSelector),
         requests: record.requests,
         metrics: record.metrics.map(metric => ({ ...metric })),
       })),
     };
-    this.exportCache = {
+    this.globalExportCache = {
       expiresAt: now + this.options.usageExportCacheTtlSeconds * 1000,
       snapshot,
     };
@@ -252,6 +253,12 @@ export class FlowayClient {
     return parsed as T;
   }
 }
+
+const clonePricingSelector = (selector: PricingSelector): PricingSelector =>
+  Object.fromEntries(Object.entries(selector).map(([key, value]) => [
+    key,
+    typeof value === 'string' ? value : { ...value },
+  ]));
 
 const validateLoginResponse = (value: unknown): LoginResponse => {
   const record = requireRecord(value, 'login response');

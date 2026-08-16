@@ -13,7 +13,7 @@ import {
 import type {
   BillingMetric,
   SanitizedExportApiKey,
-  SanitizedExportSnapshot,
+  GlobalUsageSnapshot,
   UsageMetricRecord,
   UsageRecord,
 } from '../src/types.js';
@@ -141,7 +141,7 @@ describe('usage metrics', () => {
 
 describe('usage summary', () => {
   it('uses raw export metrics for selected-upstream shares and cost', () => {
-    const snapshot: SanitizedExportSnapshot = {
+    const snapshot: GlobalUsageSnapshot = {
       exportedAt: '2026-06-21T00:00:00.000Z',
       users: [{ id: 7, username: 'alice', deletedAt: null }],
       apiKeys: [exportKey('k1', 7), exportKey('k2', 8)],
@@ -183,7 +183,7 @@ describe('usage summary', () => {
 
 describe('usage leaderboard', () => {
   it('builds top-four rankings by tokens, cost, and cache percent', () => {
-    const snapshot: SanitizedExportSnapshot = {
+    const snapshot: GlobalUsageSnapshot = {
       exportedAt: '2026-06-22T12:34:00.000Z',
       users: [
         { id: 1, username: 'alice', deletedAt: null },
@@ -241,7 +241,7 @@ describe('usage leaderboard', () => {
   });
 
   it('limits global records to the bound user upstream access list', () => {
-    const snapshot: SanitizedExportSnapshot = {
+    const snapshot: GlobalUsageSnapshot = {
       exportedAt: '2026-06-22T12:34:00.000Z',
       users: [
         { id: 1, username: 'alice', deletedAt: null },
@@ -265,7 +265,7 @@ describe('usage leaderboard', () => {
 
 describe('usage quota estimate', () => {
   it('infers user used percent from token share and upstream quota used percent', () => {
-    const snapshot: SanitizedExportSnapshot = {
+    const snapshot: GlobalUsageSnapshot = {
       exportedAt: '2026-06-22T00:00:00.000Z',
       users: [
         { id: 7, username: 'alice', deletedAt: null },

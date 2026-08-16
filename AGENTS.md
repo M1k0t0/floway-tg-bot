@@ -39,8 +39,14 @@ by the TypeScript build and must not be edited by hand.
 This bot is not the Floway gateway. It calls Floway's HTTP APIs and must keep
 Floway's permission model intact. User-facing upstream, usage, quota, and
 key-management surfaces must be scoped to the bound Floway user unless a
-Floway endpoint explicitly returns a user-specific view. Admin export data is
-allowed only as a backend data source and must be filtered before display.
+Floway endpoint explicitly returns a user-specific view. The sanitized admin
+export cache is still a global backend value. Multi-upstream user-facing
+surfaces must derive a fresh `UserScopedUsageSnapshot` from the bound user's
+latest `/auth/me` upstream access and the actual upstream on each usage record;
+never cache or share that scoped value across users. Exact-upstream consumers
+may use global export data only after checking that upstream against the current
+user. The notifier deliberately shares global enrichment across deliveries and
+rechecks each recipient's upstream access before rendering.
 
 ## Layout
 

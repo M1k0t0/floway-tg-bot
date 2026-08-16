@@ -44,8 +44,10 @@ corepack pnpm start
 - `/leaderboard [1d|7d|30d]`
 
 Binding, upstream, key, usage, quota, and leaderboard operations are private-chat only.
-Passwords are exchanged for a Floway session and are never stored. Floway
-sessions are encrypted locally with `BOT_SECRET_KEY`.
+Leaderboard rankings, totals, costs, and shares include only usage from upstreams
+currently available to the bound Floway user. Passwords are exchanged for a
+Floway session and are never stored. Floway sessions are encrypted locally with
+`BOT_SECRET_KEY`.
 
 Codex quota output hides snapshots outside their freshness period. Each snapshot
 has a minimum 24-hour lifetime from `observed_at`; future primary, secondary, or

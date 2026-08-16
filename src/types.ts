@@ -127,8 +127,8 @@ export type BillingMetric =
   | 'rerank_searches';
 
 export interface PricingThresholdCoordinate {
-  operator: 'gt' | 'gte';
-  value: number;
+  readonly operator: 'gt' | 'gte';
+  readonly value: number;
 }
 
 export type PricingCoordinateValue = string | PricingThresholdCoordinate;
@@ -143,20 +143,20 @@ export interface ModelPricing {
 }
 
 export interface UsageMetricRecord {
-  metric: BillingMetric;
-  quantity: DecimalString;
-  unitPrice: DecimalString | null;
+  readonly metric: BillingMetric;
+  readonly quantity: DecimalString;
+  readonly unitPrice: DecimalString | null;
 }
 
 export interface UsageRecord {
-  keyId: string;
-  model: string;
-  upstream: string | null;
-  modelKey: string;
-  hour: string;
-  pricingSelector: PricingSelector;
-  requests: number;
-  metrics: UsageMetricRecord[];
+  readonly keyId: string;
+  readonly model: string;
+  readonly upstream: string | null;
+  readonly modelKey: string;
+  readonly hour: string;
+  readonly pricingSelector: PricingSelector;
+  readonly requests: number;
+  readonly metrics: ReadonlyArray<UsageMetricRecord>;
 }
 
 export interface ExportApiKey {
@@ -173,7 +173,7 @@ export interface ExportApiKey {
   responsesRetentionSeconds: number;
 }
 
-export type SanitizedExportApiKey = Pick<
+export type SanitizedExportApiKey = Readonly<Omit<Pick<
   ExportApiKey,
   | 'id'
   | 'userId'
@@ -184,7 +184,9 @@ export type SanitizedExportApiKey = Pick<
   | 'deletedAt'
   | 'dumpRetentionSeconds'
   | 'responsesRetentionSeconds'
->;
+>, 'upstreamIds'>> & {
+  readonly upstreamIds: readonly string[] | null;
+};
 
 export interface FlowayExportPayload {
   version: number;
@@ -197,11 +199,15 @@ export interface FlowayExportPayload {
   };
 }
 
-export interface SanitizedExportSnapshot {
-  exportedAt: string;
-  users: Array<{ id: number; username: string; deletedAt: string | null }>;
-  apiKeys: SanitizedExportApiKey[];
-  usage: UsageRecord[];
+export interface GlobalUsageSnapshot {
+  readonly exportedAt: string;
+  readonly users: ReadonlyArray<{
+    readonly id: number;
+    readonly username: string;
+    readonly deletedAt: string | null;
+  }>;
+  readonly apiKeys: ReadonlyArray<SanitizedExportApiKey>;
+  readonly usage: ReadonlyArray<UsageRecord>;
 }
 
 export interface DisplayUsageMetric {

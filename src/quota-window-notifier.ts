@@ -31,7 +31,7 @@ import type {
   AuthMeResponse,
   Binding,
   FlowayAdminUser,
-  SanitizedExportSnapshot,
+  GlobalUsageSnapshot,
   UpstreamRecord,
 } from './types.js';
 
@@ -39,7 +39,7 @@ interface QuotaWindowFlowayClient {
   listUpstreams(): Promise<UpstreamRecord[]>;
   listUsers(): Promise<FlowayAdminUser[]>;
   getMe(session: string): Promise<AuthMeResponse>;
-  exportUsageSnapshot(): Promise<SanitizedExportSnapshot>;
+  exportUsageSnapshot(): Promise<GlobalUsageSnapshot>;
 }
 
 interface TelegramSender {
@@ -64,7 +64,7 @@ interface RefreshedBinding {
 }
 
 interface DeliveryEnrichment {
-  snapshot: SanitizedExportSnapshot;
+  snapshot: GlobalUsageSnapshot;
   users: FlowayAdminUser[];
 }
 

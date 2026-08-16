@@ -3,7 +3,9 @@ import type {
   BillingDimension,
   BillingMetric,
   FlowayAdminUser,
-  SanitizedExportSnapshot,
+  FlowayUser,
+  GlobalUsageSnapshot,
+  PricingSelector,
   TokenUsage,
   UsageRecord,
 } from './types.js';
@@ -73,6 +75,22 @@ export interface UsageLeaderboardReport {
   byTokens: UsageLeaderboardEntry[];
   byCost: UsageLeaderboardEntry[];
   byCachePercent: UsageLeaderboardEntry[];
+}
+
+const USER_SCOPED_USAGE_SNAPSHOT: unique symbol = Symbol('UserScopedUsageSnapshot');
+
+export interface UserScopedUsageSnapshot {
+  readonly exportedAt: string;
+  readonly users: ReadonlyArray<{
+    readonly id: number;
+    readonly username: string;
+  }>;
+  readonly apiKeys: ReadonlyArray<{
+    readonly id: string;
+    readonly userId: number;
+  }>;
+  readonly usage: ReadonlyArray<UsageRecord>;
+  readonly [USER_SCOPED_USAGE_SNAPSHOT]: true;
 }
 
 export interface UsageQuotaEstimate {
@@ -166,6 +184,50 @@ export const cacheReadPercent = (tokens: TokenUsage): number | null => {
 
 export const emptyTotals = (): UsageTotals => ({ requests: 0, tokens: {}, cost: 0 });
 
+export const scopeUsageSnapshotForUser = (
+  snapshot: GlobalUsageSnapshot,
+  user: Pick<FlowayUser, 'upstreamIds'>,
+): UserScopedUsageSnapshot => {
+  const allowedUpstreams = user.upstreamIds === null ? null : new Set(user.upstreamIds);
+  const usage = snapshot.usage
+    .filter(record => allowedUpstreams === null
+      || (record.upstream !== null && allowedUpstreams.has(record.upstream)))
+    .map(cloneUsageRecord);
+  const keyIds = new Set(usage.map(record => record.keyId));
+  const apiKeys = snapshot.apiKeys
+    .filter(key => keyIds.has(key.id))
+    .map(key => ({ id: key.id, userId: key.userId }));
+  const userIds = new Set(apiKeys.map(key => key.userId));
+  const users = snapshot.users
+    .filter(candidate => userIds.has(candidate.id))
+    .map(candidate => ({ id: candidate.id, username: candidate.username }));
+
+  return {
+    exportedAt: snapshot.exportedAt,
+    users,
+    apiKeys,
+    usage,
+    [USER_SCOPED_USAGE_SNAPSHOT]: true,
+  };
+};
+
+const clonePricingSelector = (selector: PricingSelector): PricingSelector =>
+  Object.fromEntries(Object.entries(selector).map(([key, value]) => [
+    key,
+    typeof value === 'string' ? value : { ...value },
+  ]));
+
+const cloneUsageRecord = (record: UsageRecord): UsageRecord => ({
+  keyId: record.keyId,
+  model: record.model,
+  upstream: record.upstream,
+  modelKey: record.modelKey,
+  hour: record.hour,
+  pricingSelector: clonePricingSelector(record.pricingSelector),
+  requests: record.requests,
+  metrics: record.metrics.map(metric => ({ ...metric })),
+});
+
 export const addUsageRecord = (totals: UsageTotals, record: UsageRecord): void => {
   totals.requests += record.requests;
   totals.cost += recordCostUsd(record);
@@ -203,7 +265,7 @@ export const summarizeUsageWindow = (
   flowayUserId: number,
   upstreamId: string,
   window: UsageWindow,
-  snapshot: SanitizedExportSnapshot,
+  snapshot: GlobalUsageSnapshot,
 ): UsageWindowReport => {
   const userKeyIds = new Set(snapshot.apiKeys.filter(key => key.userId === flowayUserId).map(key => key.id));
   const user = emptyTotals();
@@ -228,11 +290,10 @@ export const summarizeUsageWindow = (
 };
 
 export const summarizeUsageLeaderboard = (
-  snapshot: SanitizedExportSnapshot,
+  snapshot: UserScopedUsageSnapshot,
   days: LeaderboardDays = 7,
   limit = 4,
   now = new Date(),
-  upstreamIds: readonly string[] | null = null,
 ): UsageLeaderboardReport => {
   const exportedAt = validDateOrFallback(snapshot.exportedAt, now);
   const startAt = new Date(exportedAt.getTime() - days * 24 * 60 * 60 * 1000);
@@ -241,10 +302,8 @@ export const summarizeUsageLeaderboard = (
   const usersById = new Map(snapshot.users.map(user => [user.id, user]));
   const userIdByKey = new Map(snapshot.apiKeys.map(key => [key.id, key.userId]));
   const entries = new Map<number, UsageLeaderboardEntry>();
-  const allowedUpstreams = upstreamIds === null ? null : new Set(upstreamIds);
 
   for (const record of snapshot.usage) {
-    if (allowedUpstreams && (!record.upstream || !allowedUpstreams.has(record.upstream))) continue;
     if (record.hour < startHour || record.hour >= endHour) continue;
     const userId = userIdByKey.get(record.keyId);
     if (userId === undefined) continue;
@@ -289,7 +348,7 @@ export const summarizeUsageQuotaEstimate = (
   upstreamId: string,
   window: UsageWindow,
   upstreamUsedPercent: number,
-  snapshot: SanitizedExportSnapshot,
+  snapshot: GlobalUsageSnapshot,
   nonAdminUserCount: number,
 ): UsageQuotaEstimate => {
   const userKeyIds = new Set(snapshot.apiKeys.filter(key => key.userId === flowayUserId).map(key => key.id));

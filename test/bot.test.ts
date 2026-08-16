@@ -171,6 +171,61 @@ describe('bot commands', () => {
     }
   });
 
+  it('scopes leaderboard statistics to upstreams available to the requesting user', async () => {
+    const fixture = createCommandFixture();
+    fixture.store.replaceBinding({
+      telegramUserId: '42',
+      flowayUserId: 7,
+      username: 'viewer',
+      flowaySession: 'session',
+    });
+    const exportUsageSnapshot = vi.fn().mockResolvedValue({
+      exportedAt: '2026-07-01T12:00:00.000Z',
+      users: [
+        { id: 8, username: 'mixed-user', deletedAt: null },
+        { id: 9, username: 'allowed-user', deletedAt: null },
+        { id: 10, username: 'denied-only', deletedAt: null },
+      ],
+      apiKeys: [
+        exportUsageKey('mixed-key', 8, ['up_b']),
+        exportUsageKey('allowed-key', 9),
+        exportUsageKey('denied-key', 10),
+      ],
+      usage: [
+        exportUsageRecord('mixed-key', 'up_a', '100'),
+        exportUsageRecord('mixed-key', 'up_b', '9900'),
+        exportUsageRecord('allowed-key', 'up_a', '300'),
+        exportUsageRecord('denied-key', null, '7700'),
+      ],
+    });
+    const floway = {
+      getMe: vi.fn().mockResolvedValue({
+        user: { id: 7, username: 'viewer', isAdmin: false, upstreamIds: ['up_a'] },
+        viaApiKey: false,
+        apiKey: null,
+      }),
+      exportUsageSnapshot,
+    } as unknown as FlowayClient;
+    const bot = configuredBot(fixture, floway);
+    const callApi = vi.spyOn(Telegram.prototype, 'callApi').mockResolvedValue({} as never);
+
+    try {
+      await bot.handleUpdate(commandUpdate('/leaderboard 7d', 5));
+
+      expect(floway.getMe).toHaveBeenCalledWith('session');
+      expect(exportUsageSnapshot).toHaveBeenCalledTimes(1);
+      const text = sentTexts(callApi).join('\n');
+      expect(text).toContain('<b>mixed-user</b> - <b>100</b> tokens | <b>25.0%</b>');
+      expect(text).toContain('<b>allowed-user</b> - <b>300</b> tokens | <b>75.0%</b>');
+      expect(text).not.toContain('9,900');
+      expect(text).not.toContain('7,700');
+      expect(text).not.toContain('denied-only');
+    } finally {
+      callApi.mockRestore();
+      fixture.close();
+    }
+  });
+
   it('keeps a newer binding when unbind finishes an older logout', async () => {
     const fixture = createCommandFixture();
     const old = fixture.store.replaceBinding({ telegramUserId: '42', flowayUserId: 7, username: 'alice', flowaySession: 'old' });
@@ -349,6 +404,28 @@ describe('selectUpstream', () => {
     const second = upstream('up_b');
     expect(selectUpstream('up_b', [first, second], 'usage')).toEqual({ upstream: second });
   });
+});
+
+const exportUsageKey = (id: string, userId: number, upstreamIds: readonly string[] | null = null) => ({
+  id,
+  userId,
+  name: id,
+  createdAt: '2026-06-01T00:00:00.000Z',
+  upstreamIds,
+  deletedAt: null,
+  dumpRetentionSeconds: null,
+  responsesRetentionSeconds: 0,
+});
+
+const exportUsageRecord = (keyId: string, upstreamId: string | null, quantity: string) => ({
+  keyId,
+  model: 'm',
+  upstream: upstreamId,
+  modelKey: 'm',
+  hour: '2026-07-01T12',
+  pricingSelector: {},
+  requests: 1,
+  metrics: [{ metric: 'input_tokens' as const, quantity, unitPrice: null }],
 });
 
 interface CommandFixture {

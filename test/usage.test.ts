@@ -5,6 +5,7 @@ import {
   emptyTotals,
   quotaObservationToUsageWindow,
   recordCostUsd,
+  scopeUsageSnapshotForUser,
   summarizeUsageLeaderboard,
   summarizeUsageQuotaEstimate,
   summarizeUsageWindow,
@@ -30,23 +31,28 @@ const usageRecord = (
   hour: string,
   requests: number,
   metrics: UsageMetricRecord[],
+  pricingSelector: UsageRecord['pricingSelector'] = {},
 ): UsageRecord => ({
   keyId,
   model: 'm',
   upstream,
   modelKey: 'm',
   hour,
-  pricingSelector: {},
+  pricingSelector,
   requests,
   metrics,
 });
 
-const exportKey = (id: string, userId: number): SanitizedExportApiKey => ({
+const exportKey = (
+  id: string,
+  userId: number,
+  upstreamIds: readonly string[] | null = null,
+): SanitizedExportApiKey => ({
   id,
   userId,
   name: id,
   createdAt: '2026-06-01T00:00:00.000Z',
-  upstreamIds: null,
+  upstreamIds,
   deletedAt: null,
   dumpRetentionSeconds: null,
   responsesRetentionSeconds: 0,
@@ -181,6 +187,74 @@ describe('usage summary', () => {
   });
 });
 
+describe('user usage scope', () => {
+  const snapshot = (): GlobalUsageSnapshot => ({
+    exportedAt: '2026-06-22T12:34:00.000Z',
+    users: [
+      { id: 1, username: 'alice', deletedAt: null },
+      { id: 2, username: 'bob', deletedAt: null },
+      { id: 3, username: 'carol', deletedAt: null },
+      { id: 4, username: 'unused', deletedAt: null },
+    ],
+    apiKeys: [
+      exportKey('k1', 1, ['up_b']),
+      exportKey('k2', 2),
+      exportKey('k3', 3),
+      exportKey('unused', 4),
+    ],
+    usage: [
+      usageRecord('k1', 'up_a', '2026-06-22T12', 1, [metric('input_tokens', '10')], {
+        threshold: { operator: 'gte', value: 100 },
+      }),
+      usageRecord('k2', 'up_b', '2026-06-22T12', 2, [metric('output_tokens', '20')]),
+      usageRecord('k3', null, '2026-06-22T12', 3, [metric('input_cache_read_tokens', '30')]),
+      usageRecord('orphan', 'up_a', '2026-06-22T12', 4, [metric('input_tokens', '40')]),
+    ],
+  });
+
+  it('derives independent snapshots from the requesting user upstream access', () => {
+    const globalSnapshot = snapshot();
+    const original = structuredClone(globalSnapshot);
+
+    const upA = scopeUsageSnapshotForUser(globalSnapshot, { upstreamIds: ['up_a', 'up_a', 'unknown'] });
+    const upB = scopeUsageSnapshotForUser(globalSnapshot, { upstreamIds: ['up_b'] });
+
+    expect(upA.usage.map(record => record.keyId)).toEqual(['k1', 'orphan']);
+    expect(upA.apiKeys).toEqual([{ id: 'k1', userId: 1 }]);
+    expect(upA.users).toEqual([{ id: 1, username: 'alice' }]);
+    expect(upB.usage.map(record => record.keyId)).toEqual(['k2']);
+    expect(upB.users).toEqual([{ id: 2, username: 'bob' }]);
+    expect(globalSnapshot).toEqual(original);
+    expect(upA).not.toBe(globalSnapshot);
+    expect(upA.usage).not.toBe(globalSnapshot.usage);
+    expect(upA.usage[0]).not.toBe(globalSnapshot.usage[0]);
+    expect(upA.usage[0]?.metrics).not.toBe(globalSnapshot.usage[0]?.metrics);
+    expect(upA.usage[0]?.metrics[0]).not.toBe(globalSnapshot.usage[0]?.metrics[0]);
+    expect(upA.usage[0]?.pricingSelector).not.toBe(globalSnapshot.usage[0]?.pricingSelector);
+    expect(upA.usage[0]?.pricingSelector.threshold).not.toBe(globalSnapshot.usage[0]?.pricingSelector.threshold);
+  });
+
+  it('distinguishes unrestricted, empty, and multi-upstream access', () => {
+    const globalSnapshot = snapshot();
+    const unrestricted = scopeUsageSnapshotForUser(globalSnapshot, { upstreamIds: null });
+    const empty = scopeUsageSnapshotForUser(globalSnapshot, { upstreamIds: [] });
+    const multiple = scopeUsageSnapshotForUser(globalSnapshot, { upstreamIds: ['up_a', 'up_b'] });
+
+    expect(unrestricted).not.toBe(globalSnapshot);
+    expect(unrestricted.usage.map(record => record.upstream)).toEqual(['up_a', 'up_b', null, 'up_a']);
+    expect(unrestricted.users.map(user => user.username)).toEqual(['alice', 'bob', 'carol']);
+    expect(empty).toMatchObject({ users: [], apiKeys: [], usage: [] });
+    expect(multiple.usage.map(record => record.upstream)).toEqual(['up_a', 'up_b', 'up_a']);
+    expect(multiple.usage).not.toContainEqual(expect.objectContaining({ upstream: null }));
+  });
+
+  it('authorizes historical usage by its actual upstream rather than key metadata', () => {
+    const scoped = scopeUsageSnapshotForUser(snapshot(), { upstreamIds: ['up_a'] });
+
+    expect(scoped.usage).toContainEqual(expect.objectContaining({ keyId: 'k1', upstream: 'up_a' }));
+  });
+});
+
 describe('usage leaderboard', () => {
   it('builds top-four rankings by tokens, cost, and cache percent', () => {
     const snapshot: GlobalUsageSnapshot = {
@@ -220,7 +294,8 @@ describe('usage leaderboard', () => {
       ],
     };
 
-    const report = summarizeUsageLeaderboard(snapshot);
+    const userSnapshot = scopeUsageSnapshotForUser(snapshot, { upstreamIds: null });
+    const report = summarizeUsageLeaderboard(userSnapshot);
 
     expect(report.startAt).toBe('2026-06-15T12:34:00.000Z');
     expect(report.endAt).toBe('2026-06-22T12:34:00.000Z');
@@ -232,7 +307,7 @@ describe('usage leaderboard', () => {
     expect(report.totals.cost).toBeCloseTo(0.03775);
     expect(report.totals.cacheReadTokens).toBe(190);
 
-    const oneDayReport = summarizeUsageLeaderboard(snapshot, 1);
+    const oneDayReport = summarizeUsageLeaderboard(userSnapshot, 1);
     expect(oneDayReport.startAt).toBe('2026-06-21T12:34:00.000Z');
     expect(oneDayReport.byTokens.map(entry => entry.username)).toEqual(['alice', 'carol']);
     expect(oneDayReport.totals.tokens).toBe(400);
@@ -240,26 +315,63 @@ describe('usage leaderboard', () => {
     expect(oneDayReport.totals.cacheReadTokens).toBe(190);
   });
 
-  it('limits global records to the bound user upstream access list', () => {
+  it('limits every displayed user statistic to the requesting user scope', () => {
     const snapshot: GlobalUsageSnapshot = {
       exportedAt: '2026-06-22T12:34:00.000Z',
       users: [
         { id: 1, username: 'alice', deletedAt: null },
         { id: 2, username: 'bob', deletedAt: null },
-        { id: 3, username: 'carol', deletedAt: null },
+        { id: 3, username: 'denied-only', deletedAt: null },
       ],
       apiKeys: [exportKey('k1', 1), exportKey('k2', 2), exportKey('k3', 3)],
       usage: [
-        usageRecord('k1', 'up_a', '2026-06-22T12', 1, [metric('input_tokens', '100')]),
-        usageRecord('k2', 'up_b', '2026-06-22T12', 1, [metric('input_tokens', '1000')]),
-        usageRecord('k3', null, '2026-06-22T12', 1, [metric('input_tokens', '500')]),
+        usageRecord('k1', 'up_a', '2026-06-22T12', 2, [
+          metric('input_tokens', '80', '0.01'),
+          metric('input_cache_read_tokens', '20', '0.01'),
+        ]),
+        usageRecord('k1', 'up_b', '2026-06-22T12', 900, [
+          metric('input_tokens', '9000', '1'),
+          metric('input_cache_read_tokens', '9000', '1'),
+        ]),
+        usageRecord('k2', 'up_a', '2026-06-22T12', 1, [
+          metric('input_tokens', '100', '0.001'),
+          metric('input_cache_read_tokens', '300', '0.001'),
+        ]),
+        usageRecord('k2', null, '2026-06-22T12', 800, [
+          metric('input_cache_read_tokens', '8000', '1'),
+        ]),
+        usageRecord('k3', 'up_b', '2026-06-22T12', 700, [
+          metric('output_tokens', '7000', '1'),
+        ]),
       ],
     };
 
-    const report = summarizeUsageLeaderboard(snapshot, 7, 4, new Date('2026-06-22T12:34:00.000Z'), ['up_a']);
+    const userSnapshot = scopeUsageSnapshotForUser(snapshot, { upstreamIds: ['up_a'] });
+    const report = summarizeUsageLeaderboard(userSnapshot, 7, 4, new Date('2026-06-22T12:34:00.000Z'));
 
-    expect(report.byTokens.map(entry => entry.username)).toEqual(['alice']);
-    expect(report.totals.tokens).toBe(100);
+    expect(report.byTokens.map(entry => entry.username)).toEqual(['bob', 'alice']);
+    expect(report.byCost.map(entry => entry.username)).toEqual(['alice', 'bob']);
+    expect(report.byCachePercent.map(entry => entry.username)).toEqual(['bob', 'alice']);
+    expect(report.byTokens.find(entry => entry.username === 'alice')).toMatchObject({
+      totals: {
+        requests: 2,
+        tokens: { input: 80, input_cache_read: 20 },
+        cost: 1,
+      },
+      cachePercent: 20,
+    });
+    expect(report.byTokens.find(entry => entry.username === 'bob')).toMatchObject({
+      totals: {
+        requests: 1,
+        tokens: { input: 100, input_cache_read: 300 },
+        cost: 0.4,
+      },
+      cachePercent: 75,
+    });
+    expect(report.totals.tokens).toBe(500);
+    expect(report.totals.cost).toBeCloseTo(1.4);
+    expect(report.totals.cacheReadTokens).toBe(320);
+    expect(report.byTokens.map(entry => entry.username)).not.toContain('denied-only');
   });
 });
 

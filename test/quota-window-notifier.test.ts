@@ -581,16 +581,7 @@ const quotaUpstream = (
   name: 'Codex main',
   enabled: true,
   sort_order: 1,
-  created_at: '2026-05-01T00:00:00.000Z',
   updated_at: observedAt,
-  flag_overrides: {},
-  flag_defaults: {},
-  disabled_public_model_ids: [],
-  proxy_fallback_list: [],
-  model_prefix: null,
-  color: null,
-  config: {},
-  state: null,
   codex_quota: {
     premium: {
       observed_at: observedAt,
@@ -600,6 +591,7 @@ const quotaUpstream = (
       [`${slot}_used_percent`]: usedPercent,
     },
   },
+  raw: {},
 });
 
 const bindAlice = (store: BindingStore) => bindUser(store, {

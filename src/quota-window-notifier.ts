@@ -458,16 +458,9 @@ const eventUpstream = (event: QuotaWindowEvent): UpstreamRecord => ({
   name: event.upstreamName,
   enabled: true,
   sort_order: 0,
-  created_at: new Date(event.detectedAtMs).toISOString(),
   updated_at: new Date(event.detectedAtMs).toISOString(),
-  flag_overrides: {},
-  flag_defaults: {},
-  disabled_public_model_ids: [],
-  proxy_fallback_list: [],
-  model_prefix: null,
-  color: null,
-  config: null,
-  state: null,
+  codex_quota: undefined,
+  raw: {},
 });
 
 const observationFacts = (observation: QuotaWindowObservation): QuotaWindowFacts => ({

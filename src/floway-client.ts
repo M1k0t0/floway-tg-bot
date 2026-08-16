@@ -2,6 +2,7 @@ import { redactText, redactValue } from './redact.js';
 import type {
   ApiKeyRecord,
   AuthMeResponse,
+  CodexQuotaSnapshot,
   CopilotQuotaResponse,
   FlowayAdminUser,
   FlowayExportPayload,
@@ -83,24 +84,29 @@ export class FlowayClient {
   }
 
   async listUpstreams(): Promise<UpstreamRecord[]> {
-    return validateUpstreams(await this.adminRequest<unknown>('/api/upstreams'));
+    const upstreams = validateUpstreams(await this.adminRequest<unknown>('/api/upstreams'));
+    const nowMs = Date.now();
+    return upstreams.map(upstream => filterStaleCodexQuota(upstream, nowMs));
   }
 
   async getUpstream(id: string): Promise<UpstreamRecord> {
-    return validateUpstream(await this.adminRequest<unknown>(`/api/upstreams/${encodeURIComponent(id)}`));
+    const upstream = validateUpstream(
+      await this.adminRequest<unknown>(`/api/upstreams/${encodeURIComponent(id)}`),
+    );
+    return filterStaleCodexQuota(upstream, Date.now());
   }
 
-  async getUpstreamModels(record: UpstreamRecord): Promise<UpstreamModelsResponse> {
+  async getUpstreamModels(upstream: UpstreamRecord): Promise<UpstreamModelsResponse> {
     return await this.adminRequest<UpstreamModelsResponse>('/api/upstreams/list-models', {
       method: 'POST',
-      body: { record },
+      body: { record: upstream.raw },
     });
   }
 
-  async getCopilotQuota(record: UpstreamRecord): Promise<CopilotQuotaResponse> {
+  async getCopilotQuota(upstream: UpstreamRecord): Promise<CopilotQuotaResponse> {
     return await this.adminRequest<CopilotQuotaResponse>('/api/upstreams/copilot/quota', {
       method: 'POST',
-      body: { record },
+      body: { record: upstream.raw },
     });
   }
 
@@ -294,25 +300,97 @@ const validateUpstreams = (value: unknown): UpstreamRecord[] => {
 const validateUpstream = (value: unknown, label = 'upstream response'): UpstreamRecord => {
   const record = requireRecord(value, label);
   if (typeof record.id !== 'string' || record.id.length === 0
-    || typeof record.kind !== 'string'
+    || typeof record.kind !== 'string' || record.kind.length === 0
     || typeof record.name !== 'string'
     || typeof record.enabled !== 'boolean'
     || !Number.isSafeInteger(record.sort_order)
-    || typeof record.created_at !== 'string'
-    || typeof record.updated_at !== 'string'
-    || !isRecord(record.flag_overrides)
-    || !isRecord(record.flag_defaults)
-    || !isStringArray(record.disabled_public_model_ids)
-    || !Array.isArray(record.proxy_fallback_list)) {
+    || typeof record.updated_at !== 'string') {
     throw invalidResponse(label);
   }
-  return record as unknown as UpstreamRecord;
+
+  const modelsCache = parseModelsCache(record.modelsCache);
+  return {
+    id: record.id,
+    kind: record.kind,
+    name: record.name,
+    enabled: record.enabled,
+    sort_order: record.sort_order as number,
+    updated_at: record.updated_at,
+    ...(modelsCache ? { modelsCache } : {}),
+    codex_quota: record.codex_quota,
+    raw: record,
+  };
+};
+
+const parseModelsCache = (value: unknown): UpstreamRecord['modelsCache'] => {
+  if (!isRecord(value)
+    || !(value.fetchedAt === null || Number.isFinite(value.fetchedAt))) return undefined;
+
+  if (value.lastError === null) return { fetchedAt: value.fetchedAt as number | null, lastError: null };
+  if (!isRecord(value.lastError)
+    || typeof value.lastError.message !== 'string'
+    || !Number.isFinite(value.lastError.at)) return undefined;
+
+  return {
+    fetchedAt: value.fetchedAt as number | null,
+    lastError: {
+      message: value.lastError.message,
+      at: value.lastError.at as number,
+    },
+  };
+};
+
+const CODEX_QUOTA_TTL_FLOOR_MS = 24 * 60 * 60 * 1000;
+const CODEX_QUOTA_HORIZON_FIELDS = [
+  'primary_reset_after_at',
+  'secondary_reset_after_at',
+  'ratelimited_until',
+] as const satisfies readonly (keyof CodexQuotaSnapshot)[];
+
+const filterStaleCodexQuota = (upstream: UpstreamRecord, nowMs: number): UpstreamRecord => {
+  if (upstream.kind !== 'codex' || !isRecord(upstream.codex_quota)) return upstream;
+
+  const entries = Object.entries(upstream.codex_quota).filter(([, snapshot]) =>
+    codexQuotaSnapshotIsFresh(snapshot, nowMs) !== false);
+  if (entries.length === Object.keys(upstream.codex_quota).length && entries.length > 0) return upstream;
+
+  return {
+    ...upstream,
+    codex_quota: entries.length > 0
+      ? Object.fromEntries(entries)
+      : null,
+  };
+};
+
+const codexQuotaSnapshotIsFresh = (value: unknown, nowMs: number): boolean | null => {
+  if (!isRecord(value)) return null;
+  const observedAtMs = quotaTimestampMs(value.observed_at);
+  if (observedAtMs === null) return null;
+
+  const horizons: number[] = [];
+  for (const field of CODEX_QUOTA_HORIZON_FIELDS) {
+    const timestamp = value[field];
+    if (timestamp === undefined || timestamp === null) continue;
+    const resetAtMs = quotaTimestampMs(timestamp);
+    if (resetAtMs === null) return null;
+    const horizonMs = resetAtMs - nowMs;
+    if (horizonMs > 0) horizons.push(horizonMs);
+  }
+
+  const ttlMs = Math.max(CODEX_QUOTA_TTL_FLOOR_MS, ...horizons);
+  return nowMs - observedAtMs <= ttlMs;
+};
+
+const quotaTimestampMs = (value: unknown): number | null => {
+  if (typeof value !== 'string' || value.length === 0) return null;
+  const timestampMs = new Date(value).getTime();
+  return Number.isFinite(timestampMs) ? timestampMs : null;
 };
 
 const validateExportPayload = (value: unknown): FlowayExportPayload => {
   const payload = requireRecord(value, 'export response');
   const data = requireRecord(payload.data, 'export data');
-  if (payload.version !== 17
+  if (!Number.isSafeInteger(payload.version) || (payload.version as number) < 20
     || typeof payload.exportedAt !== 'string'
     || !Array.isArray(data.users)
     || !Array.isArray(data.apiKeys)
@@ -352,9 +430,6 @@ const requireRecord = (value: unknown, label: string): Record<string, unknown> =
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
-
-const isStringArray = (value: unknown): value is string[] =>
-  Array.isArray(value) && value.every(item => typeof item === 'string');
 
 const invalidResponse = (label: string): TypeError => new TypeError(`Invalid Floway ${label}`);
 

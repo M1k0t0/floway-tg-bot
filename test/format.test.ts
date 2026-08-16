@@ -44,16 +44,9 @@ describe('formatters', () => {
       name: 'Codex <main> & shared',
       enabled: true,
       sort_order: 1,
-      created_at: '2026-06-21T00:00:00.000Z',
       updated_at: '2026-06-21T00:00:00.000Z',
-      flag_overrides: {},
-      flag_defaults: {},
-      disabled_public_model_ids: [],
-      proxy_fallback_list: [],
-      model_prefix: null,
-      hue: 0,
-      config: {},
-      state: null,
+      codex_quota: undefined,
+      raw: {},
     };
 
     const text = formatUpstreamList([upstream]);
@@ -68,16 +61,8 @@ describe('formatters', () => {
       name: 'Codex',
       enabled: true,
       sort_order: 1,
-      created_at: '2026-07-01T00:00:00.000Z',
       updated_at: '2026-07-01T00:00:00.000Z',
-      flag_overrides: {},
-      flag_defaults: {},
-      disabled_public_model_ids: [],
-      proxy_fallback_list: [],
-      model_prefix: null,
-      hue: 0,
-      config: {},
-      state: null,
+      raw: {},
       codex_quota: {
         plus: {
           observed_at: '2026-07-01T01:00:00.000Z',
@@ -100,6 +85,21 @@ describe('formatters', () => {
     expect(detail).toContain('<b>Selected window</b>: <b>75.0%</b> | 10,080 min | resets <code>2026-07-08T00:00:00.000Z</code>');
     expect(detail).toContain('<b>Primary slot</b>: <b>15.0%</b> | 300 min | resets <code>2026-07-01T05:00:00.000Z</code>');
     expect(detail).toContain('<b>Secondary slot</b>: <b>75.0%</b> | 10,080 min | resets <code>2026-07-08T00:00:00.000Z</code>');
+  });
+
+  it('shows malformed models cache data as not reported', () => {
+    const upstream: UpstreamRecord = {
+      id: 'up_a',
+      kind: 'future-provider',
+      name: 'Future',
+      enabled: true,
+      sort_order: 1,
+      updated_at: '2026-07-01T00:00:00.000Z',
+      codex_quota: undefined,
+      raw: {},
+    };
+
+    expect(formatUpstreamDetail(upstream, [], null)).toContain('<b>Models cache</b>: not reported');
   });
 
   it('escapes generated key secrets, hides them, and keeps them copyable', () => {
@@ -162,16 +162,9 @@ describe('formatters', () => {
       name: 'Codex <main>&',
       enabled: true,
       sort_order: 1,
-      created_at: '2026-06-21T00:00:00.000Z',
       updated_at: '2026-06-21T00:00:00.000Z',
-      flag_overrides: {},
-      flag_defaults: {},
-      disabled_public_model_ids: [],
-      proxy_fallback_list: [],
-      model_prefix: null,
-      hue: 0,
-      config: {},
-      state: null,
+      codex_quota: undefined,
+      raw: {},
     };
     const report: UsageQuotaEstimate = {
       window: {
@@ -211,16 +204,9 @@ describe('formatters', () => {
       name: 'Codex <main>&',
       enabled: true,
       sort_order: 1,
-      created_at: '2026-06-21T00:00:00.000Z',
       updated_at: '2026-06-21T00:00:00.000Z',
-      flag_overrides: {},
-      flag_defaults: {},
-      disabled_public_model_ids: [],
-      proxy_fallback_list: [],
-      model_prefix: null,
-      hue: 0,
-      config: {},
-      state: null,
+      codex_quota: undefined,
+      raw: {},
     };
     const report: UsageQuotaEstimate = {
       window: {
@@ -321,16 +307,9 @@ describe('formatters', () => {
       name: 'Codex <main>&',
       enabled: true,
       sort_order: 1,
-      created_at: '2026-06-21T00:00:00.000Z',
       updated_at: '2026-06-21T00:00:00.000Z',
-      flag_overrides: {},
-      flag_defaults: {},
-      disabled_public_model_ids: [],
-      proxy_fallback_list: [],
-      model_prefix: null,
-      hue: 0,
-      config: {},
-      state: null,
+      codex_quota: undefined,
+      raw: {},
     };
     const report: UsageWindowReport = {
       window: {

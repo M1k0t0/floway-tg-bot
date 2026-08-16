@@ -32,17 +32,9 @@ const upstream = (
   name: 'Upstream A',
   enabled: true,
   sort_order: 0,
-  created_at: '2026-07-01T00:00:00.000Z',
   updated_at: '2026-07-01T00:00:00.000Z',
-  flag_overrides: {},
-  flag_defaults: {},
-  disabled_public_model_ids: [],
-  proxy_fallback_list: [],
-  model_prefix: null,
-  hue: 0,
-  config: {},
-  state: null,
-  codex_quota: codexQuota as Record<string, CodexQuotaSnapshot> | null,
+  codex_quota: codexQuota,
+  raw: {},
 });
 
 const validObservation = (overrides: Partial<QuotaWindowObservation> = {}): QuotaWindowObservation => ({

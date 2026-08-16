@@ -27,16 +27,9 @@ const upstream = (id: string): UpstreamRecord => ({
   name: id,
   enabled: true,
   sort_order: 0,
-  created_at: '2026-06-21T00:00:00.000Z',
   updated_at: '2026-06-21T00:00:00.000Z',
-  flag_overrides: {},
-  flag_defaults: {},
-  disabled_public_model_ids: [],
-  proxy_fallback_list: [],
-  model_prefix: null,
-  hue: 0,
-  config: {},
-  state: null,
+  codex_quota: undefined,
+  raw: { id },
 });
 
 describe('bot commands', () => {
@@ -50,8 +43,11 @@ describe('bot commands', () => {
     const listed = upstream('up_a');
     const full = {
       ...listed,
-      config: { apiKey: 'provider-secret' },
-      state: { accessToken: 'state-secret' },
+      raw: {
+        ...listed.raw,
+        config: { apiKey: 'provider-secret' },
+        state: { accessToken: 'state-secret' },
+      },
     };
     const getUpstreamModels = vi.fn().mockResolvedValue({ data: [] });
     const floway = {
@@ -112,6 +108,7 @@ describe('bot commands', () => {
       expect(reply?.[1]).toMatchObject({ text: expect.stringContaining('Models (0)') });
       expect(JSON.stringify(reply?.[1])).not.toContain('provider-secret');
       expect(JSON.stringify(reply?.[1])).not.toContain('state-secret');
+      expect(JSON.stringify(reply?.[1])).not.toContain('raw');
     } finally {
       callApi.mockRestore();
       store.close();

@@ -159,41 +159,17 @@ export interface UsageRecord {
   readonly metrics: ReadonlyArray<UsageMetricRecord>;
 }
 
-export interface ExportApiKey {
-  id: string;
-  userId: number;
-  name: string;
-  key: string;
-  serverSecret: string;
-  createdAt: string;
-  lastUsedAt?: string;
-  upstreamIds: string[] | null;
-  deletedAt: string | null;
-  dumpRetentionSeconds: number | null;
-  responsesRetentionSeconds: number;
+export interface UsageApiKeyIdentity {
+  readonly id: string;
+  readonly userId: number;
 }
-
-export type SanitizedExportApiKey = Readonly<Omit<Pick<
-  ExportApiKey,
-  | 'id'
-  | 'userId'
-  | 'name'
-  | 'createdAt'
-  | 'lastUsedAt'
-  | 'upstreamIds'
-  | 'deletedAt'
-  | 'dumpRetentionSeconds'
-  | 'responsesRetentionSeconds'
->, 'upstreamIds'>> & {
-  readonly upstreamIds: readonly string[] | null;
-};
 
 export interface FlowayExportPayload {
   version: number;
   exportedAt: string;
   data: {
     users: Array<{ id: number; username: string; deletedAt: string | null }>;
-    apiKeys: ExportApiKey[];
+    apiKeys: UsageApiKeyIdentity[];
     upstreams: unknown[];
     usage: UsageRecord[];
   };
@@ -206,7 +182,7 @@ export interface GlobalUsageSnapshot {
     readonly username: string;
     readonly deletedAt: string | null;
   }>;
-  readonly apiKeys: ReadonlyArray<SanitizedExportApiKey>;
+  readonly apiKeys: ReadonlyArray<UsageApiKeyIdentity>;
   readonly usage: ReadonlyArray<UsageRecord>;
 }
 

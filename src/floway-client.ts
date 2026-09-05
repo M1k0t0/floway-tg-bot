@@ -136,13 +136,6 @@ export class FlowayClient {
       apiKeys: payload.data.apiKeys.map(apiKey => ({
         id: apiKey.id,
         userId: apiKey.userId,
-        name: apiKey.name,
-        createdAt: apiKey.createdAt,
-        ...(apiKey.lastUsedAt !== undefined ? { lastUsedAt: apiKey.lastUsedAt } : {}),
-        upstreamIds: apiKey.upstreamIds === null ? null : [...apiKey.upstreamIds],
-        deletedAt: apiKey.deletedAt,
-        dumpRetentionSeconds: apiKey.dumpRetentionSeconds,
-        responsesRetentionSeconds: apiKey.responsesRetentionSeconds,
       })),
       usage: payload.data.usage.map(record => ({
         keyId: record.keyId,
@@ -412,8 +405,7 @@ const validateExportPayload = (value: unknown): FlowayExportPayload => {
   });
   data.apiKeys.forEach((item, index) => {
     const key = requireRecord(item, `export API key ${index}`);
-    if (typeof key.id !== 'string' || !Number.isSafeInteger(key.userId) || typeof key.name !== 'string'
-      || typeof key.createdAt !== 'string' || !Array.isArray(key.upstreamIds) && key.upstreamIds !== null) {
+    if (typeof key.id !== 'string' || !Number.isSafeInteger(key.userId)) {
       throw invalidResponse(`export API key ${index}`);
     }
   });

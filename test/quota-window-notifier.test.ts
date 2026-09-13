@@ -34,16 +34,7 @@ const ADMIN_USERS: FlowayAdminUser[] = [
 const EMPTY_SNAPSHOT: GlobalUsageSnapshot = {
   exportedAt: '2026-06-01T05:05:00.000Z',
   users: [{ id: 7, username: 'alice', deletedAt: null }],
-  apiKeys: [{
-    id: 'key_a',
-    userId: 7,
-    name: 'Alice key',
-    createdAt: '2026-06-01T00:00:00.000Z',
-    upstreamIds: null,
-    deletedAt: null,
-    dumpRetentionSeconds: null,
-    responsesRetentionSeconds: 0,
-  }],
+  apiKeys: [{ id: 'key_a', userId: 7 }],
   usage: [],
 };
 

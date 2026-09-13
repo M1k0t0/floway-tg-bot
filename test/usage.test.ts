@@ -13,7 +13,7 @@ import {
 } from '../src/usage.js';
 import type {
   BillingMetric,
-  SanitizedExportApiKey,
+  UsageApiKeyIdentity,
   GlobalUsageSnapshot,
   UsageMetricRecord,
   UsageRecord,
@@ -46,17 +46,7 @@ const usageRecord = (
 const exportKey = (
   id: string,
   userId: number,
-  upstreamIds: readonly string[] | null = null,
-): SanitizedExportApiKey => ({
-  id,
-  userId,
-  name: id,
-  createdAt: '2026-06-01T00:00:00.000Z',
-  upstreamIds,
-  deletedAt: null,
-  dumpRetentionSeconds: null,
-  responsesRetentionSeconds: 0,
-});
+): UsageApiKeyIdentity => ({ id, userId });
 
 describe('usage windows', () => {
   it('derives exact Floway hour buckets from a resolved quota observation', () => {
@@ -197,7 +187,7 @@ describe('user usage scope', () => {
       { id: 4, username: 'unused', deletedAt: null },
     ],
     apiKeys: [
-      exportKey('k1', 1, ['up_b']),
+      exportKey('k1', 1),
       exportKey('k2', 2),
       exportKey('k3', 3),
       exportKey('unused', 4),

@@ -187,7 +187,7 @@ describe('bot commands', () => {
         { id: 10, username: 'denied-only', deletedAt: null },
       ],
       apiKeys: [
-        exportUsageKey('mixed-key', 8, ['up_b']),
+        exportUsageKey('mixed-key', 8),
         exportUsageKey('allowed-key', 9),
         exportUsageKey('denied-key', 10),
       ],
@@ -406,16 +406,7 @@ describe('selectUpstream', () => {
   });
 });
 
-const exportUsageKey = (id: string, userId: number, upstreamIds: readonly string[] | null = null) => ({
-  id,
-  userId,
-  name: id,
-  createdAt: '2026-06-01T00:00:00.000Z',
-  upstreamIds,
-  deletedAt: null,
-  dumpRetentionSeconds: null,
-  responsesRetentionSeconds: 0,
-});
+const exportUsageKey = (id: string, userId: number) => ({ id, userId });
 
 const exportUsageRecord = (keyId: string, upstreamId: string | null, quantity: string) => ({
   keyId,

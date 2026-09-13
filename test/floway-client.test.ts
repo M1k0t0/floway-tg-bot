@@ -269,7 +269,7 @@ describe('FlowayClient', () => {
             upstreamIds: null,
             deletedAt: null,
             dumpRetentionSeconds: 60,
-            responsesRetentionSeconds: 86400,
+            openaiResponsesRetentionSeconds: 86400,
           }],
           upstreams: [],
           usage: [{
@@ -294,11 +294,9 @@ describe('FlowayClient', () => {
     expect(first).toBe(second);
     expect('key' in first.apiKeys[0]!).toBe(false);
     expect('serverSecret' in first.apiKeys[0]!).toBe(false);
-    expect(first.apiKeys[0]).toMatchObject({
+    expect(first.apiKeys[0]).toEqual({
       id: 'k',
-      lastUsedAt: 'y',
-      dumpRetentionSeconds: 60,
-      responsesRetentionSeconds: 86400,
+      userId: 1,
     });
     expect(first.usage[0]).toEqual({
       keyId: 'k',

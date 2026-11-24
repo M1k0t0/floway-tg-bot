@@ -8,7 +8,7 @@ import {
 import type {
   ApiKeyRecord,
   Binding,
-  CodexQuotaSnapshot,
+  ChatGPTQuotaSnapshot,
   CopilotQuotaResponse,
   TokenUsage,
   UpstreamModelRecord,
@@ -167,7 +167,7 @@ export const formatUpstreamList = (upstreams: readonly UpstreamRecord[]): string
     .sort((a, b) => a.sort_order - b.sort_order)
     .map(upstream => {
       const status = upstream.enabled ? 'enabled' : 'disabled';
-      const quotaLine = codexQuotaListSummary(upstream);
+      const quotaLine = chatgptQuotaListSummary(upstream);
       return `${upstream.sort_order}. ${bold(upstream.name)} ${code(upstream.id)}\n   ${code(upstream.kind)} | ${status}${quotaLine}`;
     });
   return [blockTitle(`Floway upstreams (${upstreams.length})`), ...rows].join('\n\n');
@@ -202,7 +202,7 @@ export const formatUpstreamDetail = (
 
   const quotaSnapshots = premiumQuotaSnapshots(upstream);
   if (quotaSnapshots.length > 0) {
-    lines.push('', blockTitle('Codex quota'));
+    lines.push('', blockTitle('ChatGPT quota'));
     const resolution = resolveQuotaWindowObservation(upstream);
     if (resolution.status === 'valid') {
       lines.push(
@@ -213,7 +213,7 @@ export const formatUpstreamDetail = (
       lines.push(label('Selected window', resolution.status));
     }
     for (const candidate of quotaSnapshots) {
-      if (!isCodexQuotaSnapshot(candidate.snapshot)) continue;
+      if (!isChatGPTQuotaSnapshot(candidate.snapshot)) continue;
       lines.push(
         '',
         label('Snapshot', quotaSnapshotLabel(candidate)),
@@ -481,7 +481,7 @@ const formatLeaderboardShare = (
 const sharePercent = (value: number, total: number): number | null =>
   total > 0 ? (value / total) * 100 : null;
 
-const codexQuotaListSummary = (upstream: UpstreamRecord): string => {
+const chatgptQuotaListSummary = (upstream: UpstreamRecord): string => {
   const resolution = resolveQuotaWindowObservation(upstream);
   if (resolution.status !== 'valid') return '';
   const observation = resolution.observation;
@@ -489,7 +489,7 @@ const codexQuotaListSummary = (upstream: UpstreamRecord): string => {
 };
 
 const quotaSnapshotLabel = (candidate: PremiumQuotaSnapshot): string => {
-  if (!isCodexQuotaSnapshot(candidate.snapshot)) return code(candidate.bucketKey);
+  if (!isChatGPTQuotaSnapshot(candidate.snapshot)) return code(candidate.bucketKey);
   return candidate.snapshot.active_limit && candidate.snapshot.active_limit !== candidate.bucketKey
     ? `${code(candidate.bucketKey)} (${code(candidate.snapshot.active_limit)})`
     : code(candidate.bucketKey);
@@ -511,7 +511,7 @@ const usageWindowBucketLabel = (window: UsageWindowReport['window']): string => 
 const usageWindowBucketText = (window: UsageWindowReport['window']): string | null =>
   window.quotaActiveLimit ?? window.quotaBucketKey ?? null;
 
-const isCodexQuotaSnapshot = (value: unknown): value is CodexQuotaSnapshot =>
+const isChatGPTQuotaSnapshot = (value: unknown): value is ChatGPTQuotaSnapshot =>
   typeof value === 'object'
   && value !== null
   && !Array.isArray(value)

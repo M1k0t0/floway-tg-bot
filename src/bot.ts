@@ -23,7 +23,6 @@ import {
 import { FlowayClient, FlowayHttpError } from './floway-client.js';
 import { resolveQuotaWindowObservation, type QuotaWindowResolution } from './quota-window.js';
 import {
-  canShareUpstreamQuota,
   quotaObservationToUsageWindow,
   scopeUsageSnapshotForUser,
   summarizeUsageLeaderboard,
@@ -33,8 +32,6 @@ import {
   type UsageWindowReport,
 } from './usage.js';
 import type { AppConfig, Binding, FlowayUser, GlobalUsageSnapshot, UpstreamRecord } from './types.js';
-
-export { canShareUpstreamQuota } from './usage.js';
 
 export const TEST_QUOTA_WINDOW_COMMAND = 'test_quota_window';
 
@@ -143,7 +140,7 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
     const bound = await requireBinding(ctx, store, floway);
     if (!bound) return;
     try {
-      const upstreams = filterUpstreamsForUser(await floway.listUpstreams(), bound.user);
+      const upstreams = await listUserUpstreams(floway, bound.binding.flowaySession);
       await replyLong(ctx, formatUpstreamList(upstreams));
     } catch (error) {
       await replyError(ctx, 'Failed to load upstreams', error);
@@ -156,7 +153,7 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
     if (!bound) return;
     const id = commandArgs(ctx).trim();
     try {
-      const upstreams = filterUpstreamsForUser(await floway.listUpstreams(), bound.user);
+      const upstreams = await listUserUpstreams(floway, bound.binding.flowaySession);
       const selection = selectUpstream(id, upstreams, 'upstream');
       if ('message' in selection) {
         await replyLong(ctx, selection.message);
@@ -198,7 +195,7 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
     }
 
     try {
-      const upstreams = filterUpstreamsForUser(await floway.listUpstreams(), bound.user);
+      const upstreams = await listUserUpstreams(floway, bound.binding.flowaySession);
       const parsed = parseNewKeyArgs(args, upstreams);
       if ('error' in parsed) {
         await ctx.reply(parsed.error);
@@ -252,7 +249,7 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
     const upstreamId = commandArgs(ctx).trim();
 
     try {
-      const upstreams = filterUpstreamsForUser(await floway.listUpstreams(), bound.user);
+      const upstreams = await listUserUpstreams(floway, bound.binding.flowaySession);
       const selection = selectUpstream(upstreamId, upstreams, 'usage');
       if ('message' in selection) {
         await replyLong(ctx, selection.message);
@@ -291,11 +288,7 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
     }
 
     try {
-      const [upstreams, users] = await Promise.all([
-        floway.listUpstreams(),
-        floway.listUsers(),
-      ]);
-      const allowedUpstreams = filterUpstreamsForUser(upstreams, bound.user);
+      const allowedUpstreams = await listUserUpstreams(floway, bound.binding.flowaySession);
       const selection = selectUpstream(parsed.upstreamId, allowedUpstreams, parsed.verbose ? 'quota verbose' : 'quota');
       if ('message' in selection) {
         await replyLong(ctx, selection.message);
@@ -314,8 +307,11 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
         return;
       }
 
-      const exportSnapshot = await floway.exportUsageSnapshot();
-      const nonAdminUserCount = users.filter(user => canShareUpstreamQuota(user, upstream.id)).length;
+      const [exportSnapshot, users] = await Promise.all([
+        floway.exportUsageSnapshot(),
+        floway.listUsers(),
+      ]);
+      const nonAdminUserCount = await floway.countUpstreamQuotaSharers(users, upstream.id);
       const report = summarizeUsageQuotaEstimate(
         bound.binding.flowayUserId,
         upstream.id,
@@ -341,8 +337,11 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
     if (!bound) return;
 
     try {
-      const globalSnapshot = await floway.exportUsageSnapshot();
-      const userSnapshot = scopeUsageSnapshotForUser(globalSnapshot, bound.user);
+      const [globalSnapshot, allowedUpstreamIds] = await Promise.all([
+        floway.exportUsageSnapshot(),
+        floway.listUsableUpstreamIds(bound.binding.flowaySession),
+      ]);
+      const userSnapshot = scopeUsageSnapshotForUser(globalSnapshot, allowedUpstreamIds);
       await replyLong(ctx, formatUsageLeaderboard(summarizeUsageLeaderboard(userSnapshot, parsed.days, 4)));
     } catch (error) {
       await replyError(ctx, 'Failed to load leaderboard', error);
@@ -356,11 +355,7 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
     const upstreamId = commandArgs(ctx).trim();
 
     try {
-      const [upstreams, users] = await Promise.all([
-        floway.listUpstreams(),
-        floway.listUsers(),
-      ]);
-      const allowedUpstreams = filterUpstreamsForUser(upstreams, bound.user).filter(upstream => upstream.enabled);
+      const allowedUpstreams = (await listUserUpstreams(floway, bound.binding.flowaySession)).filter(upstream => upstream.enabled);
       const selection = selectUpstream(upstreamId, allowedUpstreams, TEST_QUOTA_WINDOW_COMMAND);
       if ('message' in selection) {
         await replyLong(ctx, selection.message);
@@ -382,13 +377,13 @@ export const createBot = (config: AppConfig, store: BindingStore, floway: Floway
         quotaWindow,
         exportSnapshot,
       );
-      const quotaEstimate = formatQuotaWindowQuotaEstimate(
+      const quotaEstimate = await formatQuotaWindowQuotaEstimate(
+        floway,
         bound.binding.flowayUserId,
         upstream,
         quotaWindow,
         quotaWindow.upstreamPercent,
         exportSnapshot,
-        users,
       );
       await replyLong(ctx, [
         '<b>Current quota-window preview</b>',
@@ -586,11 +581,16 @@ export const parseQuotaArgs = (args: string): { upstreamId: string; verbose: boo
 
 export const filterUpstreamsForUser = (
   upstreams: readonly UpstreamRecord[],
-  user: Pick<FlowayUser, 'upstreamIds'>,
-): UpstreamRecord[] => {
-  if (user.upstreamIds === null) return [...upstreams];
-  const allowed = new Set(user.upstreamIds);
-  return upstreams.filter(upstream => allowed.has(upstream.id));
+  allowedUpstreamIds: ReadonlySet<string>,
+): UpstreamRecord[] =>
+  upstreams.filter(upstream => allowedUpstreamIds.has(upstream.id));
+
+const listUserUpstreams = async (floway: FlowayClient, session: string): Promise<UpstreamRecord[]> => {
+  const [upstreams, allowedUpstreamIds] = await Promise.all([
+    floway.listUpstreams(),
+    floway.listUsableUpstreamIds(session),
+  ]);
+  return filterUpstreamsForUser(upstreams, allowedUpstreamIds);
 };
 
 export const selectUpstream = (
@@ -608,17 +608,17 @@ export const selectUpstream = (
   return { message: formatUpstreamSelectionRequired(command, upstreams) };
 };
 
-const formatQuotaWindowQuotaEstimate = (
+const formatQuotaWindowQuotaEstimate = async (
+  floway: FlowayClient,
   flowayUserId: number,
   upstream: UpstreamRecord,
   quotaWindow: ReturnType<typeof quotaObservationToUsageWindow>,
   usedPercent: number | undefined,
   exportSnapshot: GlobalUsageSnapshot,
-  users: Awaited<ReturnType<FlowayClient['listUsers']>>,
-): string => {
+): Promise<string> => {
   if (usedPercent === undefined) return formatQuotaEstimateNotification(null);
 
-  const nonAdminUserCount = users.filter(user => canShareUpstreamQuota(user, upstream.id)).length;
+  const nonAdminUserCount = await floway.countUpstreamQuotaSharers(await floway.listUsers(), upstream.id);
   const report = summarizeUsageQuotaEstimate(
     flowayUserId,
     upstream.id,
@@ -637,7 +637,7 @@ const formatQuotaWindowResolution = (
 ): string => {
   const subject = `${htmlSafeText(upstream.name)} <code>${htmlSafeText(upstream.id)}</code>`;
   const detail = resolution.status === 'unsupported'
-    ? 'This upstream does not expose Codex quota windows.'
+    ? 'This upstream does not expose ChatGPT quota windows.'
     : resolution.status === 'malformed'
       ? 'Floway returned an invalid quota-window observation. The last known notifier state was kept.'
       : resolution.status === 'ambiguous'

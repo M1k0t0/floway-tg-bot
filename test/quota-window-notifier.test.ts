@@ -22,13 +22,13 @@ const tempDirs: string[] = [];
 const stores: BindingStore[] = [];
 
 const USER: AuthMeResponse = {
-  user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
+  user: { id: 7, username: 'alice', isAdmin: false },
   viaApiKey: false,
   apiKey: null,
 };
 
 const ADMIN_USERS: FlowayAdminUser[] = [
-  { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-01T00:00:00.000Z' },
+  { id: 7, username: 'alice', isAdmin: false, createdAt: '2026-06-01T00:00:00.000Z', groupIds: [] },
 ];
 
 const EMPTY_SNAPSHOT: GlobalUsageSnapshot = {
@@ -291,9 +291,9 @@ describe('QuotaWindowNotifier', () => {
     const anchor = store.getCursor('up_a')?.anchor;
 
     vi.setSystemTime('2026-06-02T05:00:00.000Z');
-    upstream = { ...upstream, codex_quota: null };
+    upstream = { ...upstream, chatgpt_quota: null };
     await runtime.notifier.pollOnce();
-    upstream = { ...upstream, codex_quota: { premium: { observed_at: 'bad', active_limit: 'premium' } } };
+    upstream = { ...upstream, chatgpt_quota: { premium: { observed_at: 'bad', active_limit: 'premium' } } };
     await runtime.notifier.pollOnce();
 
     expect(store.getCursor('up_a')?.anchor).toEqual(anchor);
@@ -522,6 +522,58 @@ describe('QuotaWindowNotifier', () => {
     expect(text.length).toBeLessThanOrEqual(3_800);
   });
 
+  it('commits a refresh without queueing a delivery for a binding that cannot use the upstream', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T04:55:00.000Z');
+    const store = createStore();
+    bindAlice(store);
+    let upstream = quotaUpstream('2026-06-01T00:00:00.000Z', '2026-06-01T05:00:00.000Z', '2026-06-01T04:50:00.000Z', 80);
+    const runtime = createRuntime(store, () => [upstream]);
+    runtime.floway.listUsableUpstreamIds.mockResolvedValue(new Set<string>(['up_b']));
+    await runtime.notifier.pollOnce();
+
+    vi.setSystemTime('2026-06-01T05:02:00.000Z');
+    upstream = quotaUpstream('2026-06-01T05:00:00.000Z', '2026-06-01T10:00:00.000Z', '2026-06-01T05:01:00.000Z', 2);
+    await runtime.notifier.pollOnce();
+    vi.setSystemTime('2026-06-01T05:03:00.000Z');
+    await runtime.notifier.pollOnce();
+
+    expect(runtime.floway.listUsableUpstreamIds).toHaveBeenCalledWith('session');
+    expect(store.getCursor('up_a')).toMatchObject({ revision: 1, pending: null });
+    expect(store.listEvents()).toEqual([expect.objectContaining({ kind: 'natural' })]);
+    expect(store.listDeliveries()).toEqual([]);
+    expect(runtime.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('skips a queued delivery when the binding lost access to the upstream before sending', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T05:03:00.000Z');
+    const store = createStore();
+    const binding = bindAlice(store);
+    seedPendingDelivery(store, binding.bindingId);
+    const runtime = createRuntime(store, () => []);
+    runtime.floway.listUsableUpstreamIds.mockResolvedValue(new Set<string>());
+
+    await runtime.notifier.pollOnce();
+
+    expect(runtime.sendMessage).not.toHaveBeenCalled();
+    expect(store.listDeliveries()).toEqual([expect.objectContaining({ status: 'skipped' })]);
+  });
+
+  it('counts quota sharers for the delivered upstream from the shared user list', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T05:03:00.000Z');
+    const store = createStore();
+    const binding = bindAlice(store);
+    seedPendingDelivery(store, binding.bindingId);
+    const runtime = createRuntime(store, () => []);
+
+    await runtime.notifier.pollOnce();
+
+    expect(runtime.floway.countUpstreamQuotaSharers).toHaveBeenCalledWith(ADMIN_USERS, 'up_a');
+    expect(runtime.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
   it('waits for an active observation poll before stopping', async () => {
     const store = createStore();
     let resolveUpstreams!: (upstreams: UpstreamRecord[]) => void;
@@ -550,6 +602,9 @@ const createRuntime = (
     listUpstreams: vi.fn(async () => await upstreams()),
     listUsers: vi.fn(async () => ADMIN_USERS),
     getMe: vi.fn(async () => USER),
+    listUsableUpstreamIds: vi.fn(async (_session: string) => new Set(['up_a'])),
+    countUpstreamQuotaSharers: vi.fn(async (users: readonly FlowayAdminUser[], _upstreamId: string) =>
+      users.filter(user => !user.isAdmin).length),
     exportUsageSnapshot,
   };
   return {
@@ -568,12 +623,12 @@ const quotaUpstream = (
   slot: 'primary' | 'secondary' = 'primary',
 ): UpstreamRecord => ({
   id: 'up_a',
-  kind: 'codex',
-  name: 'Codex main',
+  kind: 'chatgpt',
+  name: 'ChatGPT main',
   enabled: true,
   sort_order: 1,
   updated_at: observedAt,
-  codex_quota: {
+  chatgpt_quota: {
     premium: {
       observed_at: observedAt,
       active_limit: 'premium',
@@ -632,8 +687,8 @@ const seedPendingDeliveries = (store: BindingStore, bindingIds: readonly number[
     upstreamId: 'up_a',
     fromRevision: 0,
     toRevision: 1,
-    upstreamKind: 'codex',
-    upstreamName: 'Codex main',
+    upstreamKind: 'chatgpt',
+    upstreamName: 'ChatGPT main',
     kind: 'natural',
     previous,
     current,

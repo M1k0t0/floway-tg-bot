@@ -44,7 +44,7 @@ const transition = (overrides: Partial<NewQuotaWindowEvent> = {}): NewQuotaWindo
   upstreamId: 'up_a',
   fromRevision: 0,
   toRevision: 1,
-  upstreamKind: 'codex',
+  upstreamKind: 'chatgpt',
   upstreamName: 'Alpha',
   kind: 'natural',
   previous,

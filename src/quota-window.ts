@@ -1,6 +1,6 @@
 import type { UpstreamRecord } from './types.js';
 
-export const CODEX_PREMIUM_ACTIVE_LIMIT = 'premium';
+export const CHATGPT_PREMIUM_ACTIVE_LIMIT = 'premium';
 
 const MAX_WINDOW_MINUTES = 31 * 24 * 60;
 const MIN_TOLERANCE_MS = 1_000;
@@ -10,7 +10,7 @@ const RFC3339_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:[.](
 export interface QuotaWindowObservation {
   upstreamId: string;
   bucketKey: string;
-  activeLimit: typeof CODEX_PREMIUM_ACTIVE_LIMIT;
+  activeLimit: typeof CHATGPT_PREMIUM_ACTIVE_LIMIT;
   observedAt: string;
   observedAtMs: number;
   startAt: string;
@@ -68,12 +68,12 @@ interface QuotaCandidate {
 }
 
 export const premiumQuotaSnapshots = (
-  upstream: Pick<UpstreamRecord, 'kind' | 'codex_quota'>,
+  upstream: Pick<UpstreamRecord, 'kind' | 'chatgpt_quota'>,
 ): PremiumQuotaSnapshot[] => {
-  if (!isRecord(upstream) || upstream.kind !== 'codex' || !isRecord(upstream.codex_quota)) return [];
+  if (!isRecord(upstream) || upstream.kind !== 'chatgpt' || !isRecord(upstream.chatgpt_quota)) return [];
   const explicit: PremiumQuotaSnapshot[] = [];
   const fallback: PremiumQuotaSnapshot[] = [];
-  for (const [bucketKey, snapshot] of Object.entries(upstream.codex_quota)) {
+  for (const [bucketKey, snapshot] of Object.entries(upstream.chatgpt_quota)) {
     const kind = premiumQuotaCandidateKind(bucketKey, snapshot);
     if (kind === 'explicit') explicit.push({ bucketKey, snapshot });
     if (kind === 'fallback') fallback.push({ bucketKey, snapshot });
@@ -84,10 +84,10 @@ export const premiumQuotaSnapshots = (
 
 export const resolveQuotaWindowObservation = (upstream: UpstreamRecord): QuotaWindowResolution => {
   try {
-    if (!isRecord(upstream) || upstream.kind !== 'codex') return { status: 'unsupported' };
+    if (!isRecord(upstream) || upstream.kind !== 'chatgpt') return { status: 'unsupported' };
     if (typeof upstream.id !== 'string' || upstream.id.length === 0) return { status: 'malformed' };
 
-    const quota: unknown = upstream.codex_quota;
+    const quota: unknown = upstream.chatgpt_quota;
     if (quota === null || quota === undefined) return { status: 'missing' };
     if (!isRecord(quota)) {
       if (Array.isArray(quota) && quota.length === 0) return { status: 'missing' };
@@ -256,7 +256,7 @@ const parseCandidate = (
     observation: {
       upstreamId,
       bucketKey: normalizedBucketKey,
-      activeLimit: CODEX_PREMIUM_ACTIVE_LIMIT,
+      activeLimit: CHATGPT_PREMIUM_ACTIVE_LIMIT,
       observedAt: observed.iso,
       observedAtMs: observed.ms,
       ...facts,
@@ -313,12 +313,12 @@ const parseWindowSlot = (
 
 const premiumQuotaCandidateKind = (bucketKey: string, snapshot: unknown): CandidateKind | null => {
   if (!isRecord(snapshot)) {
-    return normalizeName(bucketKey) === CODEX_PREMIUM_ACTIVE_LIMIT ? 'fallback' : null;
+    return normalizeName(bucketKey) === CHATGPT_PREMIUM_ACTIVE_LIMIT ? 'fallback' : null;
   }
   if (snapshot.active_limit !== undefined) {
-    return normalizeName(snapshot.active_limit) === CODEX_PREMIUM_ACTIVE_LIMIT ? 'explicit' : null;
+    return normalizeName(snapshot.active_limit) === CHATGPT_PREMIUM_ACTIVE_LIMIT ? 'explicit' : null;
   }
-  return normalizeName(bucketKey) === CODEX_PREMIUM_ACTIVE_LIMIT ? 'fallback' : null;
+  return normalizeName(bucketKey) === CHATGPT_PREMIUM_ACTIVE_LIMIT ? 'fallback' : null;
 };
 
 const validUsedPercent = (value: unknown): boolean =>

@@ -2,10 +2,11 @@ import { redactText, redactValue } from './redact.js';
 import type {
   ApiKeyRecord,
   AuthMeResponse,
-  CodexQuotaSnapshot,
+  ChatGPTQuotaSnapshot,
   CopilotQuotaResponse,
   FlowayAdminUser,
   FlowayExportPayload,
+  FlowayUser,
   GlobalUsageSnapshot,
   LoginResponse,
   PricingSelector,
@@ -36,6 +37,8 @@ export class FlowayClient {
   private adminSession: string | null = null;
   private adminLoginPromise: Promise<string> | null = null;
   private globalExportCache: { expiresAt: number; snapshot: GlobalUsageSnapshot } | null = null;
+  private readonly modelUseCache = new Map<string, { expiresAt: number; allowed: boolean }>();
+  private modelGrantCache: { expiresAt: number; grants: ReadonlyMap<string, ReadonlySet<string>> } | null = null;
   private readonly fetchImpl: typeof fetch;
 
   constructor(private readonly options: FlowayClientOptions) {
@@ -56,6 +59,20 @@ export class FlowayClient {
 
   async listUsers(): Promise<FlowayAdminUser[]> {
     return validateAdminUsers(await this.adminRequest<unknown>('/api/users'));
+  }
+
+  async listUsableUpstreamIds(session: string): Promise<Set<string>> {
+    return validateUpstreamOptionIds(await this.userRequest<unknown>(session, '/api/upstream-options?view=key'));
+  }
+
+  async countUpstreamQuotaSharers(users: readonly FlowayAdminUser[], upstreamId: string): Promise<number> {
+    const modelGrants = await this.listModelGrantUpstreams();
+    const sharing = await Promise.all(users.map(async user => {
+      if (user.isAdmin) return false;
+      if (hasModelGrant(modelGrants, user, upstreamId)) return true;
+      return await this.userCanUseUpstream(user.id, upstreamId);
+    }));
+    return sharing.filter(Boolean).length;
   }
 
   async logout(session: string): Promise<{ ok: true }> {
@@ -87,20 +104,19 @@ export class FlowayClient {
   async listUpstreams(): Promise<UpstreamRecord[]> {
     const upstreams = validateUpstreams(await this.adminRequest<unknown>('/api/upstreams'));
     const nowMs = Date.now();
-    return upstreams.map(upstream => filterStaleCodexQuota(upstream, nowMs));
+    return upstreams.map(upstream => filterStaleChatGPTQuota(upstream, nowMs));
   }
 
   async getUpstream(id: string): Promise<UpstreamRecord> {
     const upstream = validateUpstream(
       await this.adminRequest<unknown>(`/api/upstreams/${encodeURIComponent(id)}`),
     );
-    return filterStaleCodexQuota(upstream, Date.now());
+    return filterStaleChatGPTQuota(upstream, Date.now());
   }
 
   async getUpstreamModels(upstream: UpstreamRecord): Promise<UpstreamModelsResponse> {
-    return await this.adminRequest<UpstreamModelsResponse>('/api/upstreams/list-models', {
+    return await this.adminRequest<UpstreamModelsResponse>(`/api/upstreams/${encodeURIComponent(upstream.id)}/list-models`, {
       method: 'POST',
-      body: { record: upstream.raw },
     });
   }
 
@@ -153,6 +169,30 @@ export class FlowayClient {
       snapshot,
     };
     return snapshot;
+  }
+
+  // Floway resolves upstream-level access; a Model.Use grant on any model under an upstream also counts as access to it, which only the raw access records show.
+  private async listModelGrantUpstreams(): Promise<ReadonlyMap<string, ReadonlySet<string>>> {
+    const now = Date.now();
+    if (this.modelGrantCache && this.modelGrantCache.expiresAt > now) return this.modelGrantCache.grants;
+
+    const grants = validateModelGrantIndex(await this.adminRequest<unknown>('/api/access-records'));
+    this.modelGrantCache = { expiresAt: now + this.options.usageExportCacheTtlSeconds * 1000, grants };
+    return grants;
+  }
+
+  private async userCanUseUpstream(userId: number, upstreamId: string): Promise<boolean> {
+    const key = `${userId}:${upstreamId}`;
+    const now = Date.now();
+    const cached = this.modelUseCache.get(key);
+    if (cached && cached.expiresAt > now) return cached.allowed;
+
+    const allowed = validateModelUseResolution(await this.adminRequest<unknown>('/api/access-resolve', {
+      method: 'POST',
+      body: { principal: { kind: 'user', id: userId }, scope: { kind: 'upstream', upstreamId } },
+    }));
+    this.modelUseCache.set(key, { expiresAt: now + this.options.usageExportCacheTtlSeconds * 1000, allowed });
+    return allowed;
   }
 
   private async userRequest<T>(session: string, path: string, init: ApiRequestInit = {}): Promise<T> {
@@ -275,22 +315,76 @@ const validateAdminUsers = (value: unknown): FlowayAdminUser[] => {
   return value.map((item, index) => {
     const user = validateFlowayUser(item, `user ${index}`);
     const record = item as Record<string, unknown>;
-    if (typeof record.createdAt !== 'string') throw invalidResponse(`user ${index}`);
-    return { ...user, createdAt: record.createdAt };
+    if (typeof record.createdAt !== 'string'
+      || !Array.isArray(record.groupIds)
+      || !record.groupIds.every(id => Number.isSafeInteger(id))) throw invalidResponse(`user ${index}`);
+    return { ...user, createdAt: record.createdAt, groupIds: record.groupIds as number[] };
   });
 };
 
-const validateFlowayUser = (value: unknown, label: string): FlowayAdminUser => {
+const validateFlowayUser = (value: unknown, label: string): FlowayUser => {
   const record = requireRecord(value, label);
   if (!Number.isSafeInteger(record.id) || (record.id as number) < 1
     || typeof record.username !== 'string'
-    || typeof record.isAdmin !== 'boolean'
-    || !(record.upstreamIds === null
-      || (Array.isArray(record.upstreamIds) && record.upstreamIds.every(id => typeof id === 'string')))) {
+    || typeof record.isAdmin !== 'boolean') {
     throw invalidResponse(label);
   }
-  return record as unknown as FlowayAdminUser;
+  return record as unknown as FlowayUser;
 };
+
+const validateUpstreamOptionIds = (value: unknown): Set<string> => {
+  if (!Array.isArray(value)) throw invalidResponse('upstream options response');
+  return new Set(value.map((item, index) => {
+    const option = requireRecord(item, `upstream option ${index}`);
+    if (typeof option.id !== 'string' || option.id.length === 0) throw invalidResponse(`upstream option ${index}`);
+    return option.id;
+  }));
+};
+
+const validateModelUseResolution = (value: unknown): boolean => {
+  const resolution = requireRecord(value, 'access resolution');
+  const values = requireRecord(resolution.values, 'access resolution values');
+  const modelUse = values['Model.Use'];
+  if (modelUse !== undefined && typeof modelUse !== 'boolean') throw invalidResponse('access resolution values');
+  return modelUse === true;
+};
+
+const validateModelGrantIndex = (value: unknown): Map<string, Set<string>> => {
+  if (!Array.isArray(value)) throw invalidResponse('access records response');
+  const grants = new Map<string, Set<string>>();
+  value.forEach((item, index) => {
+    const label = `access record ${index}`;
+    const record = requireRecord(item, label);
+    const principal = requireRecord(record.principal, label);
+    const scope = requireRecord(record.scope, label);
+    const values = requireRecord(record.values, label);
+    const kind = principal.kind;
+    const principalId = principal.id;
+    const modelUse = values['Model.Use'];
+    if ((kind !== 'user' && kind !== 'group')
+      || !Number.isSafeInteger(principalId)
+      || typeof scope.kind !== 'string'
+      || (modelUse !== undefined && typeof modelUse !== 'boolean')) {
+      throw invalidResponse(label);
+    }
+    if (scope.kind !== 'upstreamModel' || modelUse !== true) return;
+
+    const upstreamId = scope.upstreamId;
+    if (typeof upstreamId !== 'string' || upstreamId.length === 0) throw invalidResponse(label);
+    const key = `${kind}:${String(principalId)}`;
+    const upstreams = grants.get(key) ?? new Set<string>();
+    upstreams.add(upstreamId);
+    grants.set(key, upstreams);
+  });
+  return grants;
+};
+
+const hasModelGrant = (
+  grants: ReadonlyMap<string, ReadonlySet<string>>,
+  user: Pick<FlowayAdminUser, 'id' | 'groupIds'>,
+  upstreamId: string,
+): boolean => [`user:${user.id}`, ...user.groupIds.map(id => `group:${id}`)]
+  .some(key => grants.get(key)?.has(upstreamId) === true);
 
 const validateUpstreams = (value: unknown): UpstreamRecord[] => {
   if (!Array.isArray(value)) throw invalidResponse('upstreams response');
@@ -317,7 +411,7 @@ const validateUpstream = (value: unknown, label = 'upstream response'): Upstream
     sort_order: record.sort_order as number,
     updated_at: record.updated_at,
     ...(modelsCache ? { modelsCache } : {}),
-    codex_quota: record.codex_quota,
+    chatgpt_quota: record.chatgpt_quota,
     raw: record,
   };
 };
@@ -340,35 +434,35 @@ const parseModelsCache = (value: unknown): UpstreamRecord['modelsCache'] => {
   };
 };
 
-const CODEX_QUOTA_TTL_FLOOR_MS = 24 * 60 * 60 * 1000;
-const CODEX_QUOTA_HORIZON_FIELDS = [
+const CHATGPT_QUOTA_TTL_FLOOR_MS = 24 * 60 * 60 * 1000;
+const CHATGPT_QUOTA_HORIZON_FIELDS = [
   'primary_reset_after_at',
   'secondary_reset_after_at',
   'ratelimited_until',
-] as const satisfies readonly (keyof CodexQuotaSnapshot)[];
+] as const satisfies readonly (keyof ChatGPTQuotaSnapshot)[];
 
-const filterStaleCodexQuota = (upstream: UpstreamRecord, nowMs: number): UpstreamRecord => {
-  if (upstream.kind !== 'codex' || !isRecord(upstream.codex_quota)) return upstream;
+const filterStaleChatGPTQuota = (upstream: UpstreamRecord, nowMs: number): UpstreamRecord => {
+  if (upstream.kind !== 'chatgpt' || !isRecord(upstream.chatgpt_quota)) return upstream;
 
-  const entries = Object.entries(upstream.codex_quota).filter(([, snapshot]) =>
-    codexQuotaSnapshotIsFresh(snapshot, nowMs) !== false);
-  if (entries.length === Object.keys(upstream.codex_quota).length && entries.length > 0) return upstream;
+  const entries = Object.entries(upstream.chatgpt_quota).filter(([, snapshot]) =>
+    chatgptQuotaSnapshotIsFresh(snapshot, nowMs) !== false);
+  if (entries.length === Object.keys(upstream.chatgpt_quota).length && entries.length > 0) return upstream;
 
   return {
     ...upstream,
-    codex_quota: entries.length > 0
+    chatgpt_quota: entries.length > 0
       ? Object.fromEntries(entries)
       : null,
   };
 };
 
-const codexQuotaSnapshotIsFresh = (value: unknown, nowMs: number): boolean | null => {
+const chatgptQuotaSnapshotIsFresh = (value: unknown, nowMs: number): boolean | null => {
   if (!isRecord(value)) return null;
   const observedAtMs = quotaTimestampMs(value.observed_at);
   if (observedAtMs === null) return null;
 
   const horizons: number[] = [];
-  for (const field of CODEX_QUOTA_HORIZON_FIELDS) {
+  for (const field of CHATGPT_QUOTA_HORIZON_FIELDS) {
     const timestamp = value[field];
     if (timestamp === undefined || timestamp === null) continue;
     const resetAtMs = quotaTimestampMs(timestamp);
@@ -377,7 +471,7 @@ const codexQuotaSnapshotIsFresh = (value: unknown, nowMs: number): boolean | nul
     if (horizonMs > 0) horizons.push(horizonMs);
   }
 
-  const ttlMs = Math.max(CODEX_QUOTA_TTL_FLOOR_MS, ...horizons);
+  const ttlMs = Math.max(CHATGPT_QUOTA_TTL_FLOOR_MS, ...horizons);
   return nowMs - observedAtMs <= ttlMs;
 };
 
@@ -390,7 +484,7 @@ const quotaTimestampMs = (value: unknown): number | null => {
 const validateExportPayload = (value: unknown): FlowayExportPayload => {
   const payload = requireRecord(value, 'export response');
   const data = requireRecord(payload.data, 'export data');
-  if (!Number.isSafeInteger(payload.version) || (payload.version as number) < 20
+  if (!Number.isSafeInteger(payload.version) || (payload.version as number) < 25
     || typeof payload.exportedAt !== 'string'
     || !Array.isArray(data.users)
     || !Array.isArray(data.apiKeys)

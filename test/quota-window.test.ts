@@ -8,13 +8,13 @@ import {
   resolveQuotaWindowObservation,
   type QuotaWindowObservation,
 } from '../src/quota-window.js';
-import type { CodexQuotaSnapshot, UpstreamRecord } from '../src/types.js';
+import type { ChatGPTQuotaSnapshot, UpstreamRecord } from '../src/types.js';
 
 const snapshot = (
   observedAt: string,
   resetAt: string,
-  overrides: Partial<CodexQuotaSnapshot> = {},
-): CodexQuotaSnapshot => ({
+  overrides: Partial<ChatGPTQuotaSnapshot> = {},
+): ChatGPTQuotaSnapshot => ({
   observed_at: observedAt,
   active_limit: 'premium',
   primary_window_minutes: 60,
@@ -24,8 +24,8 @@ const snapshot = (
 });
 
 const upstream = (
-  codexQuota: unknown,
-  kind = 'codex',
+  chatgptQuota: unknown,
+  kind = 'chatgpt',
 ): UpstreamRecord => ({
   id: 'upstream-a',
   kind,
@@ -33,7 +33,7 @@ const upstream = (
   enabled: true,
   sort_order: 0,
   updated_at: '2026-07-01T00:00:00.000Z',
-  codex_quota: codexQuota,
+  chatgpt_quota: chatgptQuota,
   raw: {},
 });
 
@@ -134,7 +134,7 @@ describe('resolveQuotaWindowObservation', () => {
   });
 
   it('accepts a secondary-only snapshot', () => {
-    const quota: CodexQuotaSnapshot = {
+    const quota: ChatGPTQuotaSnapshot = {
       observed_at: '2026-07-01T01:00:00Z',
       active_limit: 'premium',
       secondary_window_minutes: 10_080,
@@ -166,7 +166,7 @@ describe('resolveQuotaWindowObservation', () => {
       secondary_window_minutes: 0,
       secondary_used_percent: 0,
     });
-    const secondaryWindow: CodexQuotaSnapshot = {
+    const secondaryWindow: ChatGPTQuotaSnapshot = {
       observed_at: observedAt,
       active_limit: 'premium',
       primary_window_minutes: 0,
@@ -272,7 +272,7 @@ describe('resolveQuotaWindowObservation', () => {
   });
 
   it('fails closed when a sibling slot is partial or malformed', () => {
-    const invalidSiblings: Partial<CodexQuotaSnapshot>[] = [
+    const invalidSiblings: Partial<ChatGPTQuotaSnapshot>[] = [
       { secondary_window_minutes: 10_080 },
       { secondary_reset_after_at: '2026-07-08T00:00:00Z' },
       { secondary_used_percent: 70 },

@@ -16,12 +16,11 @@ import {
 import {
   classifyQuotaWindowTransition,
   matchesQuotaWindowCandidate,
-  CODEX_PREMIUM_ACTIVE_LIMIT,
+  CHATGPT_PREMIUM_ACTIVE_LIMIT,
   resolveQuotaWindowObservation,
   type QuotaWindowObservation,
 } from './quota-window.js';
 import {
-  canShareUpstreamQuota,
   hourString,
   summarizeUsageQuotaEstimate,
   summarizeUsageWindow,
@@ -38,6 +37,8 @@ import type {
 interface QuotaWindowFlowayClient {
   listUpstreams(): Promise<UpstreamRecord[]>;
   listUsers(): Promise<FlowayAdminUser[]>;
+  listUsableUpstreamIds(session: string): Promise<Set<string>>;
+  countUpstreamQuotaSharers(users: readonly FlowayAdminUser[], upstreamId: string): Promise<number>;
   getMe(session: string): Promise<AuthMeResponse>;
   exportUsageSnapshot(): Promise<GlobalUsageSnapshot>;
 }
@@ -61,6 +62,7 @@ interface RefreshedBindings {
 interface RefreshedBinding {
   binding: Binding;
   user: AuthMeResponse['user'];
+  allowedUpstreamIds: ReadonlySet<string>;
 }
 
 interface DeliveryEnrichment {
@@ -150,7 +152,7 @@ export class QuotaWindowNotifier {
       const eligibleBindingIds = upstream.enabled
         ? [
           ...refreshedBindings.current
-            .filter(bound => canUseUpstream(bound.user, upstream.id))
+            .filter(bound => bound.allowedUpstreamIds.has(upstream.id))
             .map(bound => bound.binding.bindingId),
           ...refreshedBindings.retryableBindingIds,
         ]
@@ -187,15 +189,16 @@ export class QuotaWindowNotifier {
           this.options.store.deleteBinding({ bindingId: binding.bindingId, telegramUserId: binding.telegramUserId });
           continue;
         }
+        const allowedUpstreamIds = await this.options.floway.listUsableUpstreamIds(binding.flowaySession);
         if (me.user.username !== binding.username) {
           const result = this.options.store.refreshBinding(binding.bindingId, {
             flowayUserId: binding.flowayUserId,
             username: me.user.username,
           });
           if (result.status !== 'updated') continue;
-          current.push({ binding: result.binding, user: me.user });
+          current.push({ binding: result.binding, user: me.user, allowedUpstreamIds });
         } else {
-          current.push({ binding, user: me.user });
+          current.push({ binding, user: me.user, allowedUpstreamIds });
         }
       } catch (error) {
         if (error instanceof FlowayHttpError && error.status === 401) {
@@ -337,7 +340,8 @@ export class QuotaWindowNotifier {
         this.options.store.deleteBinding({ bindingId: binding.bindingId, telegramUserId: binding.telegramUserId });
         return;
       }
-      if (!canUseUpstream(me.user, event.upstreamId)) {
+      const allowedUpstreamIds = await this.options.floway.listUsableUpstreamIds(binding.flowaySession);
+      if (!allowedUpstreamIds.has(event.upstreamId)) {
         this.markSkipped(delivery, claimToken, 'Upstream is no longer available to this binding');
         return;
       }
@@ -437,7 +441,7 @@ export class QuotaWindowNotifier {
           previousWindow,
           event.previous.usedPercent,
           snapshot,
-          users.filter(user => canShareUpstreamQuota(user, upstream.id)).length,
+          await this.options.floway.countUpstreamQuotaSharers(users, upstream.id),
         ));
       return formatQuotaWindowEventNotification(upstream, event, report, quotaEstimate);
     } catch (error) {
@@ -459,7 +463,7 @@ const eventUpstream = (event: QuotaWindowEvent): UpstreamRecord => ({
   enabled: true,
   sort_order: 0,
   updated_at: new Date(event.detectedAtMs).toISOString(),
-  codex_quota: undefined,
+  chatgpt_quota: undefined,
   raw: {},
 });
 
@@ -476,7 +480,7 @@ const observationFacts = (observation: QuotaWindowObservation): QuotaWindowFacts
 const cursorObservation = (cursor: QuotaWindowCursor, fallbackBucketKey: string): QuotaWindowObservation => ({
   upstreamId: cursor.upstreamId,
   bucketKey: cursor.latest.quotaBucketKey ?? fallbackBucketKey,
-  activeLimit: CODEX_PREMIUM_ACTIVE_LIMIT,
+  activeLimit: CHATGPT_PREMIUM_ACTIVE_LIMIT,
   observedAt: new Date(cursor.latest.observedAtMs).toISOString(),
   observedAtMs: cursor.latest.observedAtMs,
   startAt: new Date(cursor.anchor.startAtMs).toISOString(),
@@ -508,7 +512,7 @@ const pendingObservation = (
   return {
     upstreamId: cursor.upstreamId,
     bucketKey: current.bucketKey,
-    activeLimit: CODEX_PREMIUM_ACTIVE_LIMIT,
+    activeLimit: CHATGPT_PREMIUM_ACTIVE_LIMIT,
     observedAt: new Date(pending.observedAtMs).toISOString(),
     observedAtMs: pending.observedAtMs,
     startAt: new Date(pending.startAtMs).toISOString(),
@@ -540,9 +544,6 @@ const eventPreviousUsageWindow = (event: QuotaWindowEvent): UsageWindow => {
     ...(event.previous.activeLimit ? { quotaActiveLimit: event.previous.activeLimit } : {}),
   };
 };
-
-const canUseUpstream = (user: Pick<AuthMeResponse['user'], 'upstreamIds'>, upstreamId: string): boolean =>
-  user.upstreamIds === null || user.upstreamIds.includes(upstreamId);
 
 const safeBinding = (store: BindingStore, bindingId: number): Binding | null => {
   try {

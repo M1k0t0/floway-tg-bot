@@ -27,7 +27,7 @@ const expectedUpstream = (raw: ReturnType<typeof rawUpstream>) => ({
   enabled: raw.enabled,
   sort_order: raw.sort_order,
   updated_at: raw.updated_at,
-  codex_quota: undefined,
+  chatgpt_quota: undefined,
   raw,
 });
 
@@ -43,7 +43,7 @@ const createClient = (fetchImpl: typeof fetch): FlowayClient => new FlowayClient
 
 const adminLoginResponse = () => jsonResponse({
   token: 'admin-session',
-  user: { id: 1, username: 'admin', isAdmin: true, upstreamIds: null },
+  user: { id: 1, username: 'admin', isAdmin: true },
 });
 
 describe('FlowayClient', () => {
@@ -56,7 +56,7 @@ describe('FlowayClient', () => {
       calls.push({ url, headers: new Headers(init?.headers), ...(body !== undefined ? { body } : {}) });
       if (url.endsWith('/auth/login')) {
         loginCount += 1;
-        return jsonResponse({ token: `admin-session-${loginCount}`, user: { id: 1, username: 'admin', isAdmin: true, upstreamIds: null } });
+        return jsonResponse({ token: `admin-session-${loginCount}`, user: { id: 1, username: 'admin', isAdmin: true } });
       }
       if (url.endsWith('/api/upstreams') && calls.filter(call => call.url.endsWith('/api/upstreams')).length === 1) {
         return jsonResponse({ error: 'Invalid session' }, { status: 401 });
@@ -96,7 +96,7 @@ describe('FlowayClient', () => {
         fetchedAt: 1_765_843_200_000,
         lastError: { message: 'temporary', at: 1_765_843_201_000 },
       },
-      codex_quota: undefined,
+      chatgpt_quota: undefined,
       raw: record,
     }]);
   });
@@ -132,8 +132,8 @@ describe('FlowayClient', () => {
     await expect(createClient(fetchImpl).listUpstreams()).resolves.toEqual([expectedUpstream(record)]);
   });
 
-  it('preserves primary and secondary Codex quota fields for the quota parser', async () => {
-    const codexQuota = {
+  it('preserves primary and secondary ChatGPT quota fields for the quota parser', async () => {
+    const chatgptQuota = {
       plus: {
         observed_at: '2026-07-01T01:00:00.000Z',
         active_limit: 'premium',
@@ -145,14 +145,14 @@ describe('FlowayClient', () => {
         secondary_used_percent: 75,
       },
     };
-    const record = { ...rawUpstream('up_a', 'codex'), codex_quota: codexQuota };
+    const record = { ...rawUpstream('up_a', 'chatgpt'), chatgpt_quota: chatgptQuota };
     const fetchImpl: typeof fetch = async (input) =>
       String(input).endsWith('/auth/login') ? adminLoginResponse() : jsonResponse([record]);
 
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-07-01T01:00:00.000Z'));
     try {
       const parsed = (await createClient(fetchImpl).listUpstreams())[0]!;
-      expect(parsed.codex_quota).toEqual(codexQuota);
+      expect(parsed.chatgpt_quota).toEqual(chatgptQuota);
       expect(parsed.raw).toEqual(record);
     } finally {
       nowSpy.mockRestore();
@@ -161,17 +161,17 @@ describe('FlowayClient', () => {
 
   it('does not validate quota shape based on upstream kind', async () => {
     const records = [
-      { ...rawUpstream('codex_malformed', 'codex'), codex_quota: 'malformed' },
-      { ...rawUpstream('other_with_quota', 'future-provider'), codex_quota: ['opaque'] },
+      { ...rawUpstream('chatgpt_malformed', 'chatgpt'), chatgpt_quota: 'malformed' },
+      { ...rawUpstream('other_with_quota', 'future-provider'), chatgpt_quota: ['opaque'] },
     ];
     const fetchImpl: typeof fetch = async (input) =>
       String(input).endsWith('/auth/login') ? adminLoginResponse() : jsonResponse(records);
 
     const parsed = await createClient(fetchImpl).listUpstreams();
-    expect(parsed.map(upstream => upstream.codex_quota)).toEqual(['malformed', ['opaque']]);
+    expect(parsed.map(upstream => upstream.chatgpt_quota)).toEqual(['malformed', ['opaque']]);
   });
 
-  it('filters stale Codex quota in the DTO while retaining the exact raw record', async () => {
+  it('filters stale ChatGPT quota in the DTO while retaining the exact raw record', async () => {
     const now = Date.parse('2026-07-10T12:00:00.000Z');
     const freshAtFloor = {
       observed_at: '2026-07-09T12:00:00.000Z',
@@ -202,7 +202,7 @@ describe('FlowayClient', () => {
       primary_used_percent: 45,
     };
     const rawQuota = { freshAtFloor, keptByFutureHorizon, stale, malformed };
-    const record = { ...rawUpstream('up_a', 'codex'), codex_quota: rawQuota };
+    const record = { ...rawUpstream('up_a', 'chatgpt'), chatgpt_quota: rawQuota };
     const fetchImpl: typeof fetch = async (input) => {
       const url = String(input);
       if (url.endsWith('/auth/login')) return adminLoginResponse();
@@ -214,16 +214,16 @@ describe('FlowayClient', () => {
     try {
       const expectedQuota = { freshAtFloor, keptByFutureHorizon, malformed };
       for (const parsed of [(await client.listUpstreams())[0]!, await client.getUpstream('up_a')]) {
-        expect(parsed.codex_quota).toEqual(expectedQuota);
+        expect(parsed.chatgpt_quota).toEqual(expectedQuota);
         expect(parsed.raw).toEqual(record);
-        expect(parsed.raw.codex_quota).toEqual(rawQuota);
+        expect(parsed.raw.chatgpt_quota).toEqual(rawQuota);
       }
     } finally {
       nowSpy.mockRestore();
     }
   });
 
-  it('maps a fully expired Codex quota map to null without changing raw', async () => {
+  it('maps a fully expired ChatGPT quota map to null without changing raw', async () => {
     const rawQuota = {
       premium: {
         observed_at: '2026-07-08T12:00:00.000Z',
@@ -233,15 +233,15 @@ describe('FlowayClient', () => {
         primary_used_percent: 35,
       },
     };
-    const record = { ...rawUpstream('up_a', 'codex'), codex_quota: rawQuota };
+    const record = { ...rawUpstream('up_a', 'chatgpt'), chatgpt_quota: rawQuota };
     const fetchImpl: typeof fetch = async (input) =>
       String(input).endsWith('/auth/login') ? adminLoginResponse() : jsonResponse([record]);
 
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-07-10T12:00:00.000Z'));
     try {
       const parsed = (await createClient(fetchImpl).listUpstreams())[0]!;
-      expect(parsed.codex_quota).toBeNull();
-      expect(parsed.raw.codex_quota).toEqual(rawQuota);
+      expect(parsed.chatgpt_quota).toBeNull();
+      expect(parsed.raw.chatgpt_quota).toEqual(rawQuota);
     } finally {
       nowSpy.mockRestore();
     }
@@ -254,7 +254,7 @@ describe('FlowayClient', () => {
       if (url.endsWith('/auth/login')) return adminLoginResponse();
       exportCalls += 1;
       return jsonResponse({
-        version: 20,
+        version: 25,
         exportedAt: '2026-06-21T00:00:00.000Z',
         data: {
           users: [{ id: 1, username: 'admin', deletedAt: null }],
@@ -314,12 +314,12 @@ describe('FlowayClient', () => {
     const fetchImpl: typeof fetch = async (input) =>
       String(input).endsWith('/auth/login')
         ? adminLoginResponse()
-        : jsonResponse({ version: 20, exportedAt: 'x', data: { users: 'not-an-array' } });
+        : jsonResponse({ version: 25, exportedAt: 'x', data: { users: 'not-an-array' } });
 
     await expect(createClient(fetchImpl).exportUsageSnapshot()).rejects.toThrow('Invalid Floway export response');
   });
 
-  it('posts the exact opaque raw record to model and Copilot quota actions', async () => {
+  it('posts only the upstream id to the models action and the exact opaque raw record to Copilot quota', async () => {
     const record = { ...rawUpstream('up one'), futureField: { preserved: true } };
     const calls: Array<{ url: string; method?: string; headers: Headers; body?: string }> = [];
     const fetchImpl: typeof fetch = async (input, init) => {
@@ -332,7 +332,7 @@ describe('FlowayClient', () => {
       });
       if (url.endsWith('/auth/login')) return adminLoginResponse();
       if (url.endsWith('/api/upstreams/up%20one')) return jsonResponse(record);
-      if (url.endsWith('/api/upstreams/list-models')) return jsonResponse({ data: [] });
+      if (url.endsWith('/api/upstreams/up%20one/list-models')) return jsonResponse({ data: [] });
       if (url.endsWith('/api/upstreams/copilot/quota')) return jsonResponse({ quota_reset_date: '2026-07-01' });
       return jsonResponse({ error: 'not found' }, { status: 404 });
     };
@@ -358,11 +358,11 @@ describe('FlowayClient', () => {
         contentType: null,
       },
       {
-        url: 'https://floway.example/api/upstreams/list-models',
+        url: 'https://floway.example/api/upstreams/up%20one/list-models',
         method: 'POST',
-        body: JSON.stringify({ record }),
+        body: undefined,
         session: 'admin-session',
-        contentType: 'application/json',
+        contentType: null,
       },
       {
         url: 'https://floway.example/api/upstreams/copilot/quota',
@@ -372,6 +372,250 @@ describe('FlowayClient', () => {
         contentType: 'application/json',
       },
     ]);
+  });
+
+  it('rejects an export older than the minimum supported version', async () => {
+    const fetchImpl: typeof fetch = async (input) =>
+      String(input).endsWith('/auth/login')
+        ? adminLoginResponse()
+        : jsonResponse({ version: 24, exportedAt: '2026-11-24T00:00:00.000Z', data: { users: [], apiKeys: [], upstreams: [], usage: [] } });
+
+    await expect(createClient(fetchImpl).exportUsageSnapshot()).rejects.toThrow('Invalid Floway export response');
+  });
+
+  it('accepts newer export versions that keep the fields the bot reads', async () => {
+    const fetchImpl: typeof fetch = async (input) =>
+      String(input).endsWith('/auth/login')
+        ? adminLoginResponse()
+        : jsonResponse({ version: 26, exportedAt: '2026-11-24T00:00:00.000Z', data: { users: [], apiKeys: [], upstreams: [], usage: [] } });
+
+    await expect(createClient(fetchImpl).exportUsageSnapshot()).resolves.toMatchObject({
+      exportedAt: '2026-11-24T00:00:00.000Z',
+      users: [],
+      apiKeys: [],
+      usage: [],
+    });
+  });
+
+  it('accepts session and user payloads that carry no user-level upstream list', async () => {
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith('/auth/login')) return adminLoginResponse();
+      if (url.endsWith('/auth/me')) {
+        return jsonResponse({
+          user: { id: 7, username: 'alice', isAdmin: false, preferences: {}, canViewPermissions: false, canViewUpstreams: true },
+          viaApiKey: false,
+          apiKey: null,
+        });
+      }
+      if (url.endsWith('/api/users')) {
+        return jsonResponse([{ id: 7, username: 'alice', isAdmin: false, preferences: {}, groupIds: [], createdAt: '2026-06-01T00:00:00.000Z' }]);
+      }
+      return jsonResponse({ error: 'not found' }, { status: 404 });
+    };
+    const client = createClient(fetchImpl);
+
+    await expect(client.getMe('user-session')).resolves.toMatchObject({ user: { id: 7, username: 'alice', isAdmin: false } });
+    await expect(client.listUsers()).resolves.toMatchObject([{ id: 7, username: 'alice', isAdmin: false, createdAt: '2026-06-01T00:00:00.000Z' }]);
+  });
+
+  it('lists the upstream ids usable by the requesting session', async () => {
+    const calls: Array<{ url: string; session: string | null }> = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      calls.push({ url: String(input), session: new Headers(init?.headers).get('x-floway-session') });
+      return jsonResponse([
+        { id: 'up_a', name: 'A', kind: 'chatgpt', enabled: true, hue: 1, cachedModelCount: 3 },
+        { id: 'up_b', name: 'B', kind: 'copilot', enabled: false, hue: 2, cachedModelCount: null },
+      ]);
+    };
+
+    const ids = await createClient(fetchImpl).listUsableUpstreamIds('user-session');
+
+    expect(ids).toEqual(new Set(['up_a', 'up_b']));
+    expect(calls).toEqual([{ url: 'https://floway.example/api/upstream-options?view=key', session: 'user-session' }]);
+  });
+
+  it.each([
+    ['a non-array response', { id: 'up_a' }, 'Invalid Floway upstream options response'],
+    ['an option without an id', [{ name: 'A' }], 'Invalid Floway upstream option 0'],
+    ['an option with an empty id', [{ id: '' }], 'Invalid Floway upstream option 0'],
+  ])('rejects upstream options with %s', async (_label, body, message) => {
+    const fetchImpl: typeof fetch = async () => jsonResponse(body);
+
+    await expect(createClient(fetchImpl).listUsableUpstreamIds('user-session')).rejects.toThrow(message);
+  });
+
+  it('counts non-admin users whose Model.Use resolves for the upstream and caches each answer', async () => {
+    const resolved: Array<{ session: string | null; body: { principal: { kind: string; id: number }; scope: { kind: string; upstreamId: string } } }> = [];
+    const modelUse: Record<number, boolean> = { 7: true, 8: false };
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/auth/login')) return adminLoginResponse();
+      if (url.endsWith('/api/access-records')) return jsonResponse([]);
+      if (url.endsWith('/api/access-resolve')) {
+        const body = JSON.parse(String(init?.body)) as (typeof resolved)[number]['body'];
+        resolved.push({ session: new Headers(init?.headers).get('x-floway-session'), body });
+        const value = modelUse[body.principal.id];
+        return jsonResponse({ values: value === undefined ? {} : { 'Model.Use': value }, records: [], decisions: [] });
+      }
+      return jsonResponse({ error: 'not found' }, { status: 404 });
+    };
+    const client = createClient(fetchImpl);
+    const users = [
+      { id: 1, username: 'admin', isAdmin: true, groupIds: [], createdAt: '2026-06-01T00:00:00.000Z' },
+      { id: 7, username: 'alice', isAdmin: false, groupIds: [], createdAt: '2026-06-01T00:00:00.000Z' },
+      { id: 8, username: 'bob', isAdmin: false, groupIds: [], createdAt: '2026-06-01T00:00:00.000Z' },
+      { id: 9, username: 'carol', isAdmin: false, groupIds: [], createdAt: '2026-06-01T00:00:00.000Z' },
+    ];
+
+    expect(await client.countUpstreamQuotaSharers(users, 'up_a')).toBe(1);
+    expect(resolved.map(call => call.body.principal.id).sort()).toEqual([7, 8, 9]);
+    expect(resolved.every(call => call.session === 'admin-session')).toBe(true);
+    expect(resolved.every(call => call.body.principal.kind === 'user')).toBe(true);
+    expect(resolved.every(call => call.body.scope.kind === 'upstream' && call.body.scope.upstreamId === 'up_a')).toBe(true);
+
+    expect(await client.countUpstreamQuotaSharers(users, 'up_a')).toBe(1);
+    expect(resolved).toHaveLength(3);
+
+    expect(await client.countUpstreamQuotaSharers(users, 'up_b')).toBe(1);
+    expect(resolved).toHaveLength(6);
+    expect(resolved.slice(3).every(call => call.body.scope.upstreamId === 'up_b')).toBe(true);
+  });
+
+  it('asks Floway again once a cached access answer expires', async () => {
+    let resolveCalls = 0;
+    const fetchImpl: typeof fetch = async (input) => {
+      if (String(input).endsWith('/auth/login')) return adminLoginResponse();
+      if (String(input).endsWith('/api/access-records')) return jsonResponse([]);
+      resolveCalls += 1;
+      return jsonResponse({ values: { 'Model.Use': resolveCalls > 1 }, records: [], decisions: [] });
+    };
+    const client = createClient(fetchImpl);
+    const users = [{ id: 7, username: 'alice', isAdmin: false, groupIds: [], createdAt: '2026-06-01T00:00:00.000Z' }];
+
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-24T00:00:00.000Z'));
+    try {
+      expect(await client.countUpstreamQuotaSharers(users, 'up_a')).toBe(0);
+      nowSpy.mockReturnValue(Date.parse('2026-11-24T00:00:29.000Z'));
+      expect(await client.countUpstreamQuotaSharers(users, 'up_a')).toBe(0);
+      nowSpy.mockReturnValue(Date.parse('2026-11-24T00:00:31.000Z'));
+      expect(await client.countUpstreamQuotaSharers(users, 'up_a')).toBe(1);
+      expect(resolveCalls).toBe(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    ['a non-object response', 'bad'],
+    ['missing values', { records: [] }],
+    ['a non-boolean Model.Use', { values: { 'Model.Use': 'yes' } }],
+  ])('rejects an access resolution with %s', async (_label, body) => {
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith('/auth/login')) return adminLoginResponse();
+      return jsonResponse(url.endsWith('/api/access-records') ? [] : body);
+    };
+    const users = [{ id: 7, username: 'alice', isAdmin: false, groupIds: [], createdAt: '2026-06-01T00:00:00.000Z' }];
+
+    await expect(createClient(fetchImpl).countUpstreamQuotaSharers(users, 'up_a')).rejects.toThrow('Invalid Floway access resolution');
+  });
+
+  const adminUser = (id: number, isAdmin: boolean, groupIds: number[] = []) => ({
+    id,
+    username: `user${id}`,
+    isAdmin,
+    createdAt: '2026-06-01T00:00:00.000Z',
+    groupIds,
+  });
+
+  const modelRule = (id: number, kind: 'user' | 'group', principalId: number, upstreamId: string, modelUse: boolean) => ({
+    id,
+    principal: { kind, id: principalId },
+    scope: { kind: 'upstreamModel', upstreamId, model: { kind: 'exact', value: 'gpt-5' } },
+    sortOrder: id,
+    values: { 'Model.Use': modelUse },
+  });
+
+  it('counts users and group members with a Model.Use grant on a model under the upstream as sharers', async () => {
+    const records = [
+      modelRule(1, 'user', 7, 'up_a', true),
+      modelRule(2, 'group', 3, 'up_a', true),
+      modelRule(3, 'user', 10, 'up_a', false),
+      modelRule(4, 'user', 11, 'up_b', true),
+    ];
+    const resolvedUserIds: number[] = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/auth/login')) return adminLoginResponse();
+      if (url.endsWith('/api/access-records')) return jsonResponse(records);
+      resolvedUserIds.push((JSON.parse(String(init?.body)) as { principal: { id: number } }).principal.id);
+      return jsonResponse({ values: {}, records: [], decisions: [] });
+    };
+    const users = [
+      adminUser(1, true, [3]),
+      adminUser(7, false),
+      adminUser(8, false, [3]),
+      adminUser(9, false),
+      adminUser(10, false),
+      adminUser(11, false),
+    ];
+    const client = createClient(fetchImpl);
+
+    expect(await client.countUpstreamQuotaSharers(users, 'up_a')).toBe(2);
+    expect(resolvedUserIds.sort((left, right) => left - right)).toEqual([9, 10, 11]);
+
+    resolvedUserIds.length = 0;
+    expect(await client.countUpstreamQuotaSharers(users, 'up_b')).toBe(1);
+    expect(resolvedUserIds.sort((left, right) => left - right)).toEqual([7, 8, 9, 10]);
+  });
+
+  it('reads access records once per cache window', async () => {
+    let recordCalls = 0;
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith('/auth/login')) return adminLoginResponse();
+      if (url.endsWith('/api/access-records')) {
+        recordCalls += 1;
+        return jsonResponse([]);
+      }
+      return jsonResponse({ values: { 'Model.Use': true }, records: [], decisions: [] });
+    };
+    const client = createClient(fetchImpl);
+    const users = [adminUser(7, false)];
+
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-24T00:00:00.000Z'));
+    try {
+      await client.countUpstreamQuotaSharers(users, 'up_a');
+      await client.countUpstreamQuotaSharers(users, 'up_b');
+      expect(recordCalls).toBe(1);
+      nowSpy.mockReturnValue(Date.parse('2026-11-24T00:00:31.000Z'));
+      await client.countUpstreamQuotaSharers(users, 'up_a');
+      expect(recordCalls).toBe(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    ['a non-array response', { records: [] }],
+    ['a record without a principal', [{ scope: { kind: 'upstream', upstreamId: 'up_a' }, values: {} }]],
+    ['a model record without an upstream id', [{ principal: { kind: 'user', id: 7 }, scope: { kind: 'upstreamModel' }, values: { 'Model.Use': true } }]],
+    ['a non-boolean Model.Use', [{ principal: { kind: 'user', id: 7 }, scope: { kind: 'upstream', upstreamId: 'up_a' }, values: { 'Model.Use': 'yes' } }]],
+  ])('rejects access records with %s', async (_label, body) => {
+    const fetchImpl: typeof fetch = async (input) =>
+      String(input).endsWith('/auth/login') ? adminLoginResponse() : jsonResponse(body);
+
+    await expect(createClient(fetchImpl).countUpstreamQuotaSharers([adminUser(7, false)], 'up_a')).rejects.toThrow('Invalid Floway access');
+  });
+
+  it('rejects an admin user entry without group ids', async () => {
+    const fetchImpl: typeof fetch = async (input) =>
+      String(input).endsWith('/auth/login')
+        ? adminLoginResponse()
+        : jsonResponse([{ id: 7, username: 'alice', isAdmin: false, createdAt: '2026-06-01T00:00:00.000Z' }]);
+
+    await expect(createClient(fetchImpl).listUsers()).rejects.toThrow('Invalid Floway user 0');
   });
 
   it('sends an empty JSON object when rotating a generated key', async () => {

@@ -12,15 +12,14 @@ export interface FlowayUser {
   id: number;
   username: string;
   isAdmin: boolean;
-  upstreamIds: string[] | null;
 }
 
 export interface FlowayAdminUser {
   id: number;
   username: string;
   isAdmin: boolean;
-  upstreamIds: string[] | null;
   createdAt: string;
+  groupIds: readonly number[];
 }
 
 export interface AuthMeResponse {
@@ -60,7 +59,7 @@ export interface ModelsCacheStatus {
   lastError: { message: string; at: number } | null;
 }
 
-export interface CodexQuotaSnapshot {
+export interface ChatGPTQuotaSnapshot {
   observed_at: string;
   active_limit?: string;
   plan_type?: string;
@@ -83,7 +82,7 @@ export interface UpstreamRecord {
   sort_order: number;
   updated_at: string;
   modelsCache?: ModelsCacheStatus;
-  codex_quota: unknown;
+  chatgpt_quota: unknown;
   raw: Record<string, unknown>;
 }
 

@@ -10,7 +10,6 @@ import {
   BOT_COMMANDS,
   createBot,
   TEST_QUOTA_WINDOW_COMMAND,
-  canShareUpstreamQuota,
   filterUpstreamsForUser,
   parseLeaderboardArgs,
   parseNewKeyArgs,
@@ -23,12 +22,12 @@ import type { AppConfig, UpstreamRecord } from '../src/types.js';
 
 const upstream = (id: string): UpstreamRecord => ({
   id,
-  kind: 'codex',
+  kind: 'chatgpt',
   name: id,
   enabled: true,
   sort_order: 0,
   updated_at: '2026-06-21T00:00:00.000Z',
-  codex_quota: undefined,
+  chatgpt_quota: undefined,
   raw: { id },
 });
 
@@ -52,11 +51,12 @@ describe('bot commands', () => {
     const getUpstreamModels = vi.fn().mockResolvedValue({ data: [] });
     const floway = {
       getMe: vi.fn().mockResolvedValue({
-        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
+        user: { id: 7, username: 'alice', isAdmin: false },
         viaApiKey: false,
         apiKey: null,
       }),
       listUpstreams: vi.fn().mockResolvedValue([listed]),
+      listUsableUpstreamIds: vi.fn().mockResolvedValue(new Set(['up_a'])),
       getUpstream: vi.fn().mockResolvedValue(full),
       getUpstreamModels,
       getCopilotQuota: vi.fn(),
@@ -126,7 +126,7 @@ describe('bot commands', () => {
     });
     const selected = {
       ...upstream('up_a'),
-      codex_quota: {
+      chatgpt_quota: {
         plus: {
           observed_at: '2026-07-01T01:00:00.000Z',
           active_limit: 'premium',
@@ -141,11 +141,12 @@ describe('bot commands', () => {
     } satisfies UpstreamRecord;
     const floway = {
       getMe: vi.fn().mockResolvedValue({
-        user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
+        user: { id: 7, username: 'alice', isAdmin: false },
         viaApiKey: false,
         apiKey: null,
       }),
       listUpstreams: vi.fn().mockResolvedValue([selected]),
+      listUsableUpstreamIds: vi.fn().mockResolvedValue(new Set(['up_a'])),
       exportUsageSnapshot: vi.fn().mockResolvedValue({
         exportedAt: '2026-07-01T01:00:00.000Z',
         users: [{ id: 7, username: 'alice', deletedAt: null }],
@@ -200,11 +201,12 @@ describe('bot commands', () => {
     });
     const floway = {
       getMe: vi.fn().mockResolvedValue({
-        user: { id: 7, username: 'viewer', isAdmin: false, upstreamIds: ['up_a'] },
+        user: { id: 7, username: 'viewer', isAdmin: false },
         viaApiKey: false,
         apiKey: null,
       }),
       exportUsageSnapshot,
+      listUsableUpstreamIds: vi.fn().mockResolvedValue(new Set(['up_a'])),
     } as unknown as FlowayClient;
     const bot = configuredBot(fixture, floway);
     const callApi = vi.spyOn(Telegram.prototype, 'callApi').mockResolvedValue({} as never);
@@ -213,6 +215,7 @@ describe('bot commands', () => {
       await bot.handleUpdate(commandUpdate('/leaderboard 7d', 5));
 
       expect(floway.getMe).toHaveBeenCalledWith('session');
+      expect(floway.listUsableUpstreamIds).toHaveBeenCalledWith('session');
       expect(exportUsageSnapshot).toHaveBeenCalledTimes(1);
       const text = sentTexts(callApi).join('\n');
       expect(text).toContain('<b>mixed-user</b> - <b>100</b> tokens | <b>25.0%</b>');
@@ -263,7 +266,7 @@ describe('bot commands', () => {
       await vi.waitFor(() => expect(floway.getMe).toHaveBeenCalledWith('old'));
       const current = fixture.store.replaceBinding({ telegramUserId: '42', flowayUserId: 8, username: 'bob', flowaySession: 'new' });
       me.resolve({
-        user: { id: 7, username: 'alice-renamed', isAdmin: false, upstreamIds: null },
+        user: { id: 7, username: 'alice-renamed', isAdmin: false },
         viaApiKey: false,
         apiKey: null,
       });
@@ -364,26 +367,17 @@ describe('parseQuotaArgs', () => {
 describe('upstream permission filtering', () => {
   const upstreams = [upstream('up_a'), upstream('up_b'), upstream('up_c')];
 
-  it('keeps all upstreams for users with unrestricted upstream access', () => {
-    expect(filterUpstreamsForUser(upstreams, { upstreamIds: null }).map(item => item.id)).toEqual(['up_a', 'up_b', 'up_c']);
+  it('keeps every upstream the bound user may use', () => {
+    expect(filterUpstreamsForUser(upstreams, new Set(['up_a', 'up_b', 'up_c'])).map(item => item.id)).toEqual(['up_a', 'up_b', 'up_c']);
   });
 
-  it('keeps only upstreams listed on the bound user', () => {
-    expect(filterUpstreamsForUser(upstreams, { upstreamIds: ['up_b'] }).map(item => item.id)).toEqual(['up_b']);
+  it('keeps only upstreams the bound user may use', () => {
+    expect(filterUpstreamsForUser(upstreams, new Set(['up_b'])).map(item => item.id)).toEqual(['up_b']);
   });
 
-  it('hides explicitly requested upstreams outside the bound user access list', () => {
-    const allowed = filterUpstreamsForUser(upstreams, { upstreamIds: ['up_a'] });
+  it('hides explicitly requested upstreams outside the bound user access', () => {
+    const allowed = filterUpstreamsForUser(upstreams, new Set(['up_a']));
     expect(selectUpstream('up_b', allowed, 'usage')).toEqual({ message: 'Upstream not found: up_b' });
-  });
-});
-
-describe('quota sharing users', () => {
-  it('counts only non-admin users who can access the selected upstream', () => {
-    expect(canShareUpstreamQuota({ isAdmin: false, upstreamIds: null }, 'up_a')).toBe(true);
-    expect(canShareUpstreamQuota({ isAdmin: false, upstreamIds: ['up_a'] }, 'up_a')).toBe(true);
-    expect(canShareUpstreamQuota({ isAdmin: false, upstreamIds: ['up_b'] }, 'up_a')).toBe(false);
-    expect(canShareUpstreamQuota({ isAdmin: true, upstreamIds: null }, 'up_a')).toBe(false);
   });
 });
 

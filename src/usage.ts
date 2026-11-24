@@ -2,8 +2,6 @@ import type { QuotaWindowObservation } from './quota-window.js';
 import type {
   BillingDimension,
   BillingMetric,
-  FlowayAdminUser,
-  FlowayUser,
   GlobalUsageSnapshot,
   PricingSelector,
   TokenUsage,
@@ -186,12 +184,10 @@ export const emptyTotals = (): UsageTotals => ({ requests: 0, tokens: {}, cost: 
 
 export const scopeUsageSnapshotForUser = (
   snapshot: GlobalUsageSnapshot,
-  user: Pick<FlowayUser, 'upstreamIds'>,
+  allowedUpstreamIds: ReadonlySet<string>,
 ): UserScopedUsageSnapshot => {
-  const allowedUpstreams = user.upstreamIds === null ? null : new Set(user.upstreamIds);
   const usage = snapshot.usage
-    .filter(record => allowedUpstreams === null
-      || (record.upstream !== null && allowedUpstreams.has(record.upstream)))
+    .filter(record => record.upstream !== null && allowedUpstreamIds.has(record.upstream))
     .map(cloneUsageRecord);
   const keyIds = new Set(usage.map(record => record.keyId));
   const apiKeys = snapshot.apiKeys
@@ -385,9 +381,6 @@ export const summarizeUsageQuotaEstimate = (
     estimatedUserUsedPercent,
   };
 };
-
-export const canShareUpstreamQuota = (user: Pick<FlowayAdminUser, 'isAdmin' | 'upstreamIds'>, upstreamId: string): boolean =>
-  !user.isAdmin && (user.upstreamIds === null || user.upstreamIds.includes(upstreamId));
 
 const compareByTokens = (a: UsageLeaderboardEntry, b: UsageLeaderboardEntry): number =>
   tokenTotal(b.totals.tokens) - tokenTotal(a.totals.tokens)

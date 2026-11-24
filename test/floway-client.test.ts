@@ -451,6 +451,7 @@ describe('FlowayClient', () => {
     const fetchImpl: typeof fetch = async (input, init) => {
       const url = String(input);
       if (url.endsWith('/auth/login')) return adminLoginResponse();
+      if (url.endsWith('/api/access-records')) return jsonResponse([]);
       if (url.endsWith('/api/access-resolve')) {
         const body = JSON.parse(String(init?.body)) as (typeof resolved)[number]['body'];
         resolved.push({ session: new Headers(init?.headers).get('x-floway-session'), body });
@@ -461,10 +462,10 @@ describe('FlowayClient', () => {
     };
     const client = createClient(fetchImpl);
     const users = [
-      { id: 1, username: 'admin', isAdmin: true, createdAt: '2026-06-01T00:00:00.000Z' },
-      { id: 7, username: 'alice', isAdmin: false, createdAt: '2026-06-01T00:00:00.000Z' },
-      { id: 8, username: 'bob', isAdmin: false, createdAt: '2026-06-01T00:00:00.000Z' },
-      { id: 9, username: 'carol', isAdmin: false, createdAt: '2026-06-01T00:00:00.000Z' },
+      { id: 1, username: 'admin', isAdmin: true, groupIds: [], createdAt: '2026-06-01T00:00:00.000Z' },
+      { id: 7, username: 'alice', isAdmin: false, groupIds: [], createdAt: '2026-06-01T00:00:00.000Z' },
+      { id: 8, username: 'bob', isAdmin: false, groupIds: [], createdAt: '2026-06-01T00:00:00.000Z' },
+      { id: 9, username: 'carol', isAdmin: false, groupIds: [], createdAt: '2026-06-01T00:00:00.000Z' },
     ];
 
     expect(await client.countUpstreamQuotaSharers(users, 'up_a')).toBe(1);
@@ -485,11 +486,12 @@ describe('FlowayClient', () => {
     let resolveCalls = 0;
     const fetchImpl: typeof fetch = async (input) => {
       if (String(input).endsWith('/auth/login')) return adminLoginResponse();
+      if (String(input).endsWith('/api/access-records')) return jsonResponse([]);
       resolveCalls += 1;
       return jsonResponse({ values: { 'Model.Use': resolveCalls > 1 }, records: [], decisions: [] });
     };
     const client = createClient(fetchImpl);
-    const users = [{ id: 7, username: 'alice', isAdmin: false, createdAt: '2026-06-01T00:00:00.000Z' }];
+    const users = [{ id: 7, username: 'alice', isAdmin: false, groupIds: [], createdAt: '2026-06-01T00:00:00.000Z' }];
 
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-24T00:00:00.000Z'));
     try {
@@ -509,11 +511,111 @@ describe('FlowayClient', () => {
     ['missing values', { records: [] }],
     ['a non-boolean Model.Use', { values: { 'Model.Use': 'yes' } }],
   ])('rejects an access resolution with %s', async (_label, body) => {
-    const fetchImpl: typeof fetch = async (input) =>
-      String(input).endsWith('/auth/login') ? adminLoginResponse() : jsonResponse(body);
-    const users = [{ id: 7, username: 'alice', isAdmin: false, createdAt: '2026-06-01T00:00:00.000Z' }];
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith('/auth/login')) return adminLoginResponse();
+      return jsonResponse(url.endsWith('/api/access-records') ? [] : body);
+    };
+    const users = [{ id: 7, username: 'alice', isAdmin: false, groupIds: [], createdAt: '2026-06-01T00:00:00.000Z' }];
 
     await expect(createClient(fetchImpl).countUpstreamQuotaSharers(users, 'up_a')).rejects.toThrow('Invalid Floway access resolution');
+  });
+
+  const adminUser = (id: number, isAdmin: boolean, groupIds: number[] = []) => ({
+    id,
+    username: `user${id}`,
+    isAdmin,
+    createdAt: '2026-06-01T00:00:00.000Z',
+    groupIds,
+  });
+
+  const modelRule = (id: number, kind: 'user' | 'group', principalId: number, upstreamId: string, modelUse: boolean) => ({
+    id,
+    principal: { kind, id: principalId },
+    scope: { kind: 'upstreamModel', upstreamId, model: { kind: 'exact', value: 'gpt-5' } },
+    sortOrder: id,
+    values: { 'Model.Use': modelUse },
+  });
+
+  it('counts users and group members with a Model.Use grant on a model under the upstream as sharers', async () => {
+    const records = [
+      modelRule(1, 'user', 7, 'up_a', true),
+      modelRule(2, 'group', 3, 'up_a', true),
+      modelRule(3, 'user', 10, 'up_a', false),
+      modelRule(4, 'user', 11, 'up_b', true),
+    ];
+    const resolvedUserIds: number[] = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/auth/login')) return adminLoginResponse();
+      if (url.endsWith('/api/access-records')) return jsonResponse(records);
+      resolvedUserIds.push((JSON.parse(String(init?.body)) as { principal: { id: number } }).principal.id);
+      return jsonResponse({ values: {}, records: [], decisions: [] });
+    };
+    const users = [
+      adminUser(1, true, [3]),
+      adminUser(7, false),
+      adminUser(8, false, [3]),
+      adminUser(9, false),
+      adminUser(10, false),
+      adminUser(11, false),
+    ];
+    const client = createClient(fetchImpl);
+
+    expect(await client.countUpstreamQuotaSharers(users, 'up_a')).toBe(2);
+    expect(resolvedUserIds.sort((left, right) => left - right)).toEqual([9, 10, 11]);
+
+    resolvedUserIds.length = 0;
+    expect(await client.countUpstreamQuotaSharers(users, 'up_b')).toBe(1);
+    expect(resolvedUserIds.sort((left, right) => left - right)).toEqual([7, 8, 9, 10]);
+  });
+
+  it('reads access records once per cache window', async () => {
+    let recordCalls = 0;
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith('/auth/login')) return adminLoginResponse();
+      if (url.endsWith('/api/access-records')) {
+        recordCalls += 1;
+        return jsonResponse([]);
+      }
+      return jsonResponse({ values: { 'Model.Use': true }, records: [], decisions: [] });
+    };
+    const client = createClient(fetchImpl);
+    const users = [adminUser(7, false)];
+
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-24T00:00:00.000Z'));
+    try {
+      await client.countUpstreamQuotaSharers(users, 'up_a');
+      await client.countUpstreamQuotaSharers(users, 'up_b');
+      expect(recordCalls).toBe(1);
+      nowSpy.mockReturnValue(Date.parse('2026-11-24T00:00:31.000Z'));
+      await client.countUpstreamQuotaSharers(users, 'up_a');
+      expect(recordCalls).toBe(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    ['a non-array response', { records: [] }],
+    ['a record without a principal', [{ scope: { kind: 'upstream', upstreamId: 'up_a' }, values: {} }]],
+    ['a model record without an upstream id', [{ principal: { kind: 'user', id: 7 }, scope: { kind: 'upstreamModel' }, values: { 'Model.Use': true } }]],
+    ['a non-boolean Model.Use', [{ principal: { kind: 'user', id: 7 }, scope: { kind: 'upstream', upstreamId: 'up_a' }, values: { 'Model.Use': 'yes' } }]],
+  ])('rejects access records with %s', async (_label, body) => {
+    const fetchImpl: typeof fetch = async (input) =>
+      String(input).endsWith('/auth/login') ? adminLoginResponse() : jsonResponse(body);
+
+    await expect(createClient(fetchImpl).countUpstreamQuotaSharers([adminUser(7, false)], 'up_a')).rejects.toThrow('Invalid Floway access');
+  });
+
+  it('rejects an admin user entry without group ids', async () => {
+    const fetchImpl: typeof fetch = async (input) =>
+      String(input).endsWith('/auth/login')
+        ? adminLoginResponse()
+        : jsonResponse([{ id: 7, username: 'alice', isAdmin: false, createdAt: '2026-06-01T00:00:00.000Z' }]);
+
+    await expect(createClient(fetchImpl).listUsers()).rejects.toThrow('Invalid Floway user 0');
   });
 
   it('sends an empty JSON object when rotating a generated key', async () => {

@@ -52,10 +52,11 @@ may use global export data only after checking that upstream against the current
 user. The notifier deliberately shares global enrichment across deliveries and
 rechecks each recipient's usable upstreams before rendering. A bound user's
 usable upstreams are what Floway's `/api/upstream-options` returns for that
-user's own session; the bot never derives access itself. Quota-share counts ask
-Floway's `/api/access-resolve`, as admin, whether each non-admin user holds
-`Model.Use` on the upstream, and cache each answer for the usage export cache
-TTL.
+user's own session. Quota-share counts treat a non-admin user as sharing an
+upstream when Floway's `/api/access-resolve`, asked as admin, grants `Model.Use`
+on it, or when an admin read of `/api/access-records` shows a `Model.Use: true`
+rule for that user or one of their groups on any model under it. Both answers
+are cached for the usage export cache TTL.
 
 ## Layout
 

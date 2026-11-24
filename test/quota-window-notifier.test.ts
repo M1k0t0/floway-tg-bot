@@ -28,7 +28,7 @@ const USER: AuthMeResponse = {
 };
 
 const ADMIN_USERS: FlowayAdminUser[] = [
-  { id: 7, username: 'alice', isAdmin: false, createdAt: '2026-06-01T00:00:00.000Z' },
+  { id: 7, username: 'alice', isAdmin: false, createdAt: '2026-06-01T00:00:00.000Z', groupIds: [] },
 ];
 
 const EMPTY_SNAPSHOT: GlobalUsageSnapshot = {

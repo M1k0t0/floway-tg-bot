@@ -428,7 +428,7 @@ const quotaTimestampMs = (value: unknown): number | null => {
 const validateExportPayload = (value: unknown): FlowayExportPayload => {
   const payload = requireRecord(value, 'export response');
   const data = requireRecord(payload.data, 'export data');
-  if (!Number.isSafeInteger(payload.version) || (payload.version as number) < 20
+  if (!Number.isSafeInteger(payload.version) || (payload.version as number) < 25
     || typeof payload.exportedAt !== 'string'
     || !Array.isArray(data.users)
     || !Array.isArray(data.apiKeys)

@@ -19,6 +19,7 @@ export interface FlowayAdminUser {
   username: string;
   isAdmin: boolean;
   createdAt: string;
+  groupIds: readonly number[];
 }
 
 export interface AuthMeResponse {

@@ -6,6 +6,7 @@ import type {
   CopilotQuotaResponse,
   FlowayAdminUser,
   FlowayExportPayload,
+  FlowayUser,
   GlobalUsageSnapshot,
   LoginResponse,
   PricingSelector,
@@ -37,6 +38,7 @@ export class FlowayClient {
   private adminLoginPromise: Promise<string> | null = null;
   private globalExportCache: { expiresAt: number; snapshot: GlobalUsageSnapshot } | null = null;
   private readonly modelUseCache = new Map<string, { expiresAt: number; allowed: boolean }>();
+  private modelGrantCache: { expiresAt: number; grants: ReadonlyMap<string, ReadonlySet<string>> } | null = null;
   private readonly fetchImpl: typeof fetch;
 
   constructor(private readonly options: FlowayClientOptions) {
@@ -64,7 +66,12 @@ export class FlowayClient {
   }
 
   async countUpstreamQuotaSharers(users: readonly FlowayAdminUser[], upstreamId: string): Promise<number> {
-    const sharing = await Promise.all(users.map(async user => !user.isAdmin && await this.userCanUseUpstream(user.id, upstreamId)));
+    const modelGrants = await this.listModelGrantUpstreams();
+    const sharing = await Promise.all(users.map(async user => {
+      if (user.isAdmin) return false;
+      if (hasModelGrant(modelGrants, user, upstreamId)) return true;
+      return await this.userCanUseUpstream(user.id, upstreamId);
+    }));
     return sharing.filter(Boolean).length;
   }
 
@@ -162,6 +169,16 @@ export class FlowayClient {
       snapshot,
     };
     return snapshot;
+  }
+
+  // Floway resolves upstream-level access; a Model.Use grant on any model under an upstream also counts as access to it, which only the raw access records show.
+  private async listModelGrantUpstreams(): Promise<ReadonlyMap<string, ReadonlySet<string>>> {
+    const now = Date.now();
+    if (this.modelGrantCache && this.modelGrantCache.expiresAt > now) return this.modelGrantCache.grants;
+
+    const grants = validateModelGrantIndex(await this.adminRequest<unknown>('/api/access-records'));
+    this.modelGrantCache = { expiresAt: now + this.options.usageExportCacheTtlSeconds * 1000, grants };
+    return grants;
   }
 
   private async userCanUseUpstream(userId: number, upstreamId: string): Promise<boolean> {
@@ -298,19 +315,21 @@ const validateAdminUsers = (value: unknown): FlowayAdminUser[] => {
   return value.map((item, index) => {
     const user = validateFlowayUser(item, `user ${index}`);
     const record = item as Record<string, unknown>;
-    if (typeof record.createdAt !== 'string') throw invalidResponse(`user ${index}`);
-    return { ...user, createdAt: record.createdAt };
+    if (typeof record.createdAt !== 'string'
+      || !Array.isArray(record.groupIds)
+      || !record.groupIds.every(id => Number.isSafeInteger(id))) throw invalidResponse(`user ${index}`);
+    return { ...user, createdAt: record.createdAt, groupIds: record.groupIds as number[] };
   });
 };
 
-const validateFlowayUser = (value: unknown, label: string): FlowayAdminUser => {
+const validateFlowayUser = (value: unknown, label: string): FlowayUser => {
   const record = requireRecord(value, label);
   if (!Number.isSafeInteger(record.id) || (record.id as number) < 1
     || typeof record.username !== 'string'
     || typeof record.isAdmin !== 'boolean') {
     throw invalidResponse(label);
   }
-  return record as unknown as FlowayAdminUser;
+  return record as unknown as FlowayUser;
 };
 
 const validateUpstreamOptionIds = (value: unknown): Set<string> => {
@@ -329,6 +348,43 @@ const validateModelUseResolution = (value: unknown): boolean => {
   if (modelUse !== undefined && typeof modelUse !== 'boolean') throw invalidResponse('access resolution values');
   return modelUse === true;
 };
+
+const validateModelGrantIndex = (value: unknown): Map<string, Set<string>> => {
+  if (!Array.isArray(value)) throw invalidResponse('access records response');
+  const grants = new Map<string, Set<string>>();
+  value.forEach((item, index) => {
+    const label = `access record ${index}`;
+    const record = requireRecord(item, label);
+    const principal = requireRecord(record.principal, label);
+    const scope = requireRecord(record.scope, label);
+    const values = requireRecord(record.values, label);
+    const kind = principal.kind;
+    const principalId = principal.id;
+    const modelUse = values['Model.Use'];
+    if ((kind !== 'user' && kind !== 'group')
+      || !Number.isSafeInteger(principalId)
+      || typeof scope.kind !== 'string'
+      || (modelUse !== undefined && typeof modelUse !== 'boolean')) {
+      throw invalidResponse(label);
+    }
+    if (scope.kind !== 'upstreamModel' || modelUse !== true) return;
+
+    const upstreamId = scope.upstreamId;
+    if (typeof upstreamId !== 'string' || upstreamId.length === 0) throw invalidResponse(label);
+    const key = `${kind}:${String(principalId)}`;
+    const upstreams = grants.get(key) ?? new Set<string>();
+    upstreams.add(upstreamId);
+    grants.set(key, upstreams);
+  });
+  return grants;
+};
+
+const hasModelGrant = (
+  grants: ReadonlyMap<string, ReadonlySet<string>>,
+  user: Pick<FlowayAdminUser, 'id' | 'groupIds'>,
+  upstreamId: string,
+): boolean => [`user:${user.id}`, ...user.groupIds.map(id => `group:${id}`)]
+  .some(key => grants.get(key)?.has(upstreamId) === true);
 
 const validateUpstreams = (value: unknown): UpstreamRecord[] => {
   if (!Array.isArray(value)) throw invalidResponse('upstreams response');

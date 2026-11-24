@@ -206,8 +206,8 @@ describe('user usage scope', () => {
     const globalSnapshot = snapshot();
     const original = JSON.parse(JSON.stringify(globalSnapshot)) as GlobalUsageSnapshot;
 
-    const upA = scopeUsageSnapshotForUser(globalSnapshot, { upstreamIds: ['up_a', 'up_a', 'unknown'] });
-    const upB = scopeUsageSnapshotForUser(globalSnapshot, { upstreamIds: ['up_b'] });
+    const upA = scopeUsageSnapshotForUser(globalSnapshot, new Set(['up_a', 'up_a', 'unknown']));
+    const upB = scopeUsageSnapshotForUser(globalSnapshot, new Set(['up_b']));
 
     expect(upA.usage.map(record => record.keyId)).toEqual(['k1', 'orphan']);
     expect(upA.apiKeys).toEqual([{ id: 'k1', userId: 1 }]);
@@ -224,22 +224,19 @@ describe('user usage scope', () => {
     expect(upA.usage[0]?.pricingSelector.threshold).not.toBe(globalSnapshot.usage[0]?.pricingSelector.threshold);
   });
 
-  it('distinguishes unrestricted, empty, and multi-upstream access', () => {
+  it('distinguishes empty and multi-upstream access and never admits usage without an upstream', () => {
     const globalSnapshot = snapshot();
-    const unrestricted = scopeUsageSnapshotForUser(globalSnapshot, { upstreamIds: null });
-    const empty = scopeUsageSnapshotForUser(globalSnapshot, { upstreamIds: [] });
-    const multiple = scopeUsageSnapshotForUser(globalSnapshot, { upstreamIds: ['up_a', 'up_b'] });
+    const empty = scopeUsageSnapshotForUser(globalSnapshot, new Set<string>());
+    const multiple = scopeUsageSnapshotForUser(globalSnapshot, new Set(['up_a', 'up_b']));
 
-    expect(unrestricted).not.toBe(globalSnapshot);
-    expect(unrestricted.usage.map(record => record.upstream)).toEqual(['up_a', 'up_b', null, 'up_a']);
-    expect(unrestricted.users.map(user => user.username)).toEqual(['alice', 'bob', 'carol']);
+    expect(multiple).not.toBe(globalSnapshot);
     expect(empty).toMatchObject({ users: [], apiKeys: [], usage: [] });
     expect(multiple.usage.map(record => record.upstream)).toEqual(['up_a', 'up_b', 'up_a']);
     expect(multiple.usage).not.toContainEqual(expect.objectContaining({ upstream: null }));
   });
 
   it('authorizes historical usage by its actual upstream rather than key metadata', () => {
-    const scoped = scopeUsageSnapshotForUser(snapshot(), { upstreamIds: ['up_a'] });
+    const scoped = scopeUsageSnapshotForUser(snapshot(), new Set(['up_a']));
 
     expect(scoped.usage).toContainEqual(expect.objectContaining({ keyId: 'k1', upstream: 'up_a' }));
   });
@@ -284,7 +281,7 @@ describe('usage leaderboard', () => {
       ],
     };
 
-    const userSnapshot = scopeUsageSnapshotForUser(snapshot, { upstreamIds: null });
+    const userSnapshot = scopeUsageSnapshotForUser(snapshot, new Set(['up']));
     const report = summarizeUsageLeaderboard(userSnapshot);
 
     expect(report.startAt).toBe('2026-06-15T12:34:00.000Z');
@@ -336,7 +333,7 @@ describe('usage leaderboard', () => {
       ],
     };
 
-    const userSnapshot = scopeUsageSnapshotForUser(snapshot, { upstreamIds: ['up_a'] });
+    const userSnapshot = scopeUsageSnapshotForUser(snapshot, new Set(['up_a']));
     const report = summarizeUsageLeaderboard(userSnapshot, 7, 4, new Date('2026-06-22T12:34:00.000Z'));
 
     expect(report.byTokens.map(entry => entry.username)).toEqual(['bob', 'alice']);

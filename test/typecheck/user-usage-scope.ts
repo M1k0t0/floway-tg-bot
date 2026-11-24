@@ -8,7 +8,7 @@ const globalSnapshot: GlobalUsageSnapshot = {
   usage: [],
 };
 
-const scopedSnapshot = scopeUsageSnapshotForUser(globalSnapshot, { upstreamIds: [] });
+const scopedSnapshot = scopeUsageSnapshotForUser(globalSnapshot, new Set<string>());
 summarizeUsageLeaderboard(scopedSnapshot);
 
 // @ts-expect-error A global admin snapshot must be scoped before leaderboard aggregation.

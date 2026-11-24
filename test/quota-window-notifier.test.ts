@@ -22,13 +22,13 @@ const tempDirs: string[] = [];
 const stores: BindingStore[] = [];
 
 const USER: AuthMeResponse = {
-  user: { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'] },
+  user: { id: 7, username: 'alice', isAdmin: false },
   viaApiKey: false,
   apiKey: null,
 };
 
 const ADMIN_USERS: FlowayAdminUser[] = [
-  { id: 7, username: 'alice', isAdmin: false, upstreamIds: ['up_a'], createdAt: '2026-06-01T00:00:00.000Z' },
+  { id: 7, username: 'alice', isAdmin: false, createdAt: '2026-06-01T00:00:00.000Z' },
 ];
 
 const EMPTY_SNAPSHOT: GlobalUsageSnapshot = {
@@ -550,6 +550,9 @@ const createRuntime = (
     listUpstreams: vi.fn(async () => await upstreams()),
     listUsers: vi.fn(async () => ADMIN_USERS),
     getMe: vi.fn(async () => USER),
+    listUsableUpstreamIds: vi.fn(async (_session: string) => new Set(['up_a'])),
+    countUpstreamQuotaSharers: vi.fn(async (users: readonly FlowayAdminUser[], _upstreamId: string) =>
+      users.filter(user => !user.isAdmin).length),
     exportUsageSnapshot,
   };
   return {

@@ -100,7 +100,7 @@ quota window advances.
 
 Important invariants:
 
-- Hide Codex quota snapshots outside their freshness period before commands or
+- Hide ChatGPT quota snapshots outside their freshness period before commands or
   notifier polling consume upstream records. Use `observed_at` as the snapshot
   age origin, a minimum 24-hour TTL, and any longer positive horizon to the
   primary reset, secondary reset, or rate-limit end. Keep malformed snapshots

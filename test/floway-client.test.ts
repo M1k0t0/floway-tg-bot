@@ -27,7 +27,7 @@ const expectedUpstream = (raw: ReturnType<typeof rawUpstream>) => ({
   enabled: raw.enabled,
   sort_order: raw.sort_order,
   updated_at: raw.updated_at,
-  codex_quota: undefined,
+  chatgpt_quota: undefined,
   raw,
 });
 
@@ -96,7 +96,7 @@ describe('FlowayClient', () => {
         fetchedAt: 1_765_843_200_000,
         lastError: { message: 'temporary', at: 1_765_843_201_000 },
       },
-      codex_quota: undefined,
+      chatgpt_quota: undefined,
       raw: record,
     }]);
   });
@@ -132,8 +132,8 @@ describe('FlowayClient', () => {
     await expect(createClient(fetchImpl).listUpstreams()).resolves.toEqual([expectedUpstream(record)]);
   });
 
-  it('preserves primary and secondary Codex quota fields for the quota parser', async () => {
-    const codexQuota = {
+  it('preserves primary and secondary ChatGPT quota fields for the quota parser', async () => {
+    const chatgptQuota = {
       plus: {
         observed_at: '2026-07-01T01:00:00.000Z',
         active_limit: 'premium',
@@ -145,14 +145,14 @@ describe('FlowayClient', () => {
         secondary_used_percent: 75,
       },
     };
-    const record = { ...rawUpstream('up_a', 'codex'), codex_quota: codexQuota };
+    const record = { ...rawUpstream('up_a', 'chatgpt'), chatgpt_quota: chatgptQuota };
     const fetchImpl: typeof fetch = async (input) =>
       String(input).endsWith('/auth/login') ? adminLoginResponse() : jsonResponse([record]);
 
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-07-01T01:00:00.000Z'));
     try {
       const parsed = (await createClient(fetchImpl).listUpstreams())[0]!;
-      expect(parsed.codex_quota).toEqual(codexQuota);
+      expect(parsed.chatgpt_quota).toEqual(chatgptQuota);
       expect(parsed.raw).toEqual(record);
     } finally {
       nowSpy.mockRestore();
@@ -161,17 +161,17 @@ describe('FlowayClient', () => {
 
   it('does not validate quota shape based on upstream kind', async () => {
     const records = [
-      { ...rawUpstream('codex_malformed', 'codex'), codex_quota: 'malformed' },
-      { ...rawUpstream('other_with_quota', 'future-provider'), codex_quota: ['opaque'] },
+      { ...rawUpstream('chatgpt_malformed', 'chatgpt'), chatgpt_quota: 'malformed' },
+      { ...rawUpstream('other_with_quota', 'future-provider'), chatgpt_quota: ['opaque'] },
     ];
     const fetchImpl: typeof fetch = async (input) =>
       String(input).endsWith('/auth/login') ? adminLoginResponse() : jsonResponse(records);
 
     const parsed = await createClient(fetchImpl).listUpstreams();
-    expect(parsed.map(upstream => upstream.codex_quota)).toEqual(['malformed', ['opaque']]);
+    expect(parsed.map(upstream => upstream.chatgpt_quota)).toEqual(['malformed', ['opaque']]);
   });
 
-  it('filters stale Codex quota in the DTO while retaining the exact raw record', async () => {
+  it('filters stale ChatGPT quota in the DTO while retaining the exact raw record', async () => {
     const now = Date.parse('2026-07-10T12:00:00.000Z');
     const freshAtFloor = {
       observed_at: '2026-07-09T12:00:00.000Z',
@@ -202,7 +202,7 @@ describe('FlowayClient', () => {
       primary_used_percent: 45,
     };
     const rawQuota = { freshAtFloor, keptByFutureHorizon, stale, malformed };
-    const record = { ...rawUpstream('up_a', 'codex'), codex_quota: rawQuota };
+    const record = { ...rawUpstream('up_a', 'chatgpt'), chatgpt_quota: rawQuota };
     const fetchImpl: typeof fetch = async (input) => {
       const url = String(input);
       if (url.endsWith('/auth/login')) return adminLoginResponse();
@@ -214,16 +214,16 @@ describe('FlowayClient', () => {
     try {
       const expectedQuota = { freshAtFloor, keptByFutureHorizon, malformed };
       for (const parsed of [(await client.listUpstreams())[0]!, await client.getUpstream('up_a')]) {
-        expect(parsed.codex_quota).toEqual(expectedQuota);
+        expect(parsed.chatgpt_quota).toEqual(expectedQuota);
         expect(parsed.raw).toEqual(record);
-        expect(parsed.raw.codex_quota).toEqual(rawQuota);
+        expect(parsed.raw.chatgpt_quota).toEqual(rawQuota);
       }
     } finally {
       nowSpy.mockRestore();
     }
   });
 
-  it('maps a fully expired Codex quota map to null without changing raw', async () => {
+  it('maps a fully expired ChatGPT quota map to null without changing raw', async () => {
     const rawQuota = {
       premium: {
         observed_at: '2026-07-08T12:00:00.000Z',
@@ -233,15 +233,15 @@ describe('FlowayClient', () => {
         primary_used_percent: 35,
       },
     };
-    const record = { ...rawUpstream('up_a', 'codex'), codex_quota: rawQuota };
+    const record = { ...rawUpstream('up_a', 'chatgpt'), chatgpt_quota: rawQuota };
     const fetchImpl: typeof fetch = async (input) =>
       String(input).endsWith('/auth/login') ? adminLoginResponse() : jsonResponse([record]);
 
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-07-10T12:00:00.000Z'));
     try {
       const parsed = (await createClient(fetchImpl).listUpstreams())[0]!;
-      expect(parsed.codex_quota).toBeNull();
-      expect(parsed.raw.codex_quota).toEqual(rawQuota);
+      expect(parsed.chatgpt_quota).toBeNull();
+      expect(parsed.raw.chatgpt_quota).toEqual(rawQuota);
     } finally {
       nowSpy.mockRestore();
     }

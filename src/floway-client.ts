@@ -2,7 +2,7 @@ import { redactText, redactValue } from './redact.js';
 import type {
   ApiKeyRecord,
   AuthMeResponse,
-  CodexQuotaSnapshot,
+  ChatGPTQuotaSnapshot,
   CopilotQuotaResponse,
   FlowayAdminUser,
   FlowayExportPayload,
@@ -97,14 +97,14 @@ export class FlowayClient {
   async listUpstreams(): Promise<UpstreamRecord[]> {
     const upstreams = validateUpstreams(await this.adminRequest<unknown>('/api/upstreams'));
     const nowMs = Date.now();
-    return upstreams.map(upstream => filterStaleCodexQuota(upstream, nowMs));
+    return upstreams.map(upstream => filterStaleChatGPTQuota(upstream, nowMs));
   }
 
   async getUpstream(id: string): Promise<UpstreamRecord> {
     const upstream = validateUpstream(
       await this.adminRequest<unknown>(`/api/upstreams/${encodeURIComponent(id)}`),
     );
-    return filterStaleCodexQuota(upstream, Date.now());
+    return filterStaleChatGPTQuota(upstream, Date.now());
   }
 
   async getUpstreamModels(upstream: UpstreamRecord): Promise<UpstreamModelsResponse> {
@@ -355,7 +355,7 @@ const validateUpstream = (value: unknown, label = 'upstream response'): Upstream
     sort_order: record.sort_order as number,
     updated_at: record.updated_at,
     ...(modelsCache ? { modelsCache } : {}),
-    codex_quota: record.codex_quota,
+    chatgpt_quota: record.chatgpt_quota,
     raw: record,
   };
 };
@@ -378,35 +378,35 @@ const parseModelsCache = (value: unknown): UpstreamRecord['modelsCache'] => {
   };
 };
 
-const CODEX_QUOTA_TTL_FLOOR_MS = 24 * 60 * 60 * 1000;
-const CODEX_QUOTA_HORIZON_FIELDS = [
+const CHATGPT_QUOTA_TTL_FLOOR_MS = 24 * 60 * 60 * 1000;
+const CHATGPT_QUOTA_HORIZON_FIELDS = [
   'primary_reset_after_at',
   'secondary_reset_after_at',
   'ratelimited_until',
-] as const satisfies readonly (keyof CodexQuotaSnapshot)[];
+] as const satisfies readonly (keyof ChatGPTQuotaSnapshot)[];
 
-const filterStaleCodexQuota = (upstream: UpstreamRecord, nowMs: number): UpstreamRecord => {
-  if (upstream.kind !== 'codex' || !isRecord(upstream.codex_quota)) return upstream;
+const filterStaleChatGPTQuota = (upstream: UpstreamRecord, nowMs: number): UpstreamRecord => {
+  if (upstream.kind !== 'chatgpt' || !isRecord(upstream.chatgpt_quota)) return upstream;
 
-  const entries = Object.entries(upstream.codex_quota).filter(([, snapshot]) =>
-    codexQuotaSnapshotIsFresh(snapshot, nowMs) !== false);
-  if (entries.length === Object.keys(upstream.codex_quota).length && entries.length > 0) return upstream;
+  const entries = Object.entries(upstream.chatgpt_quota).filter(([, snapshot]) =>
+    chatgptQuotaSnapshotIsFresh(snapshot, nowMs) !== false);
+  if (entries.length === Object.keys(upstream.chatgpt_quota).length && entries.length > 0) return upstream;
 
   return {
     ...upstream,
-    codex_quota: entries.length > 0
+    chatgpt_quota: entries.length > 0
       ? Object.fromEntries(entries)
       : null,
   };
 };
 
-const codexQuotaSnapshotIsFresh = (value: unknown, nowMs: number): boolean | null => {
+const chatgptQuotaSnapshotIsFresh = (value: unknown, nowMs: number): boolean | null => {
   if (!isRecord(value)) return null;
   const observedAtMs = quotaTimestampMs(value.observed_at);
   if (observedAtMs === null) return null;
 
   const horizons: number[] = [];
-  for (const field of CODEX_QUOTA_HORIZON_FIELDS) {
+  for (const field of CHATGPT_QUOTA_HORIZON_FIELDS) {
     const timestamp = value[field];
     if (timestamp === undefined || timestamp === null) continue;
     const resetAtMs = quotaTimestampMs(timestamp);
@@ -415,7 +415,7 @@ const codexQuotaSnapshotIsFresh = (value: unknown, nowMs: number): boolean | nul
     if (horizonMs > 0) horizons.push(horizonMs);
   }
 
-  const ttlMs = Math.max(CODEX_QUOTA_TTL_FLOOR_MS, ...horizons);
+  const ttlMs = Math.max(CHATGPT_QUOTA_TTL_FLOOR_MS, ...horizons);
   return nowMs - observedAtMs <= ttlMs;
 };
 

@@ -291,9 +291,9 @@ describe('QuotaWindowNotifier', () => {
     const anchor = store.getCursor('up_a')?.anchor;
 
     vi.setSystemTime('2026-06-02T05:00:00.000Z');
-    upstream = { ...upstream, codex_quota: null };
+    upstream = { ...upstream, chatgpt_quota: null };
     await runtime.notifier.pollOnce();
-    upstream = { ...upstream, codex_quota: { premium: { observed_at: 'bad', active_limit: 'premium' } } };
+    upstream = { ...upstream, chatgpt_quota: { premium: { observed_at: 'bad', active_limit: 'premium' } } };
     await runtime.notifier.pollOnce();
 
     expect(store.getCursor('up_a')?.anchor).toEqual(anchor);
@@ -568,12 +568,12 @@ const quotaUpstream = (
   slot: 'primary' | 'secondary' = 'primary',
 ): UpstreamRecord => ({
   id: 'up_a',
-  kind: 'codex',
-  name: 'Codex main',
+  kind: 'chatgpt',
+  name: 'ChatGPT main',
   enabled: true,
   sort_order: 1,
   updated_at: observedAt,
-  codex_quota: {
+  chatgpt_quota: {
     premium: {
       observed_at: observedAt,
       active_limit: 'premium',
@@ -632,8 +632,8 @@ const seedPendingDeliveries = (store: BindingStore, bindingIds: readonly number[
     upstreamId: 'up_a',
     fromRevision: 0,
     toRevision: 1,
-    upstreamKind: 'codex',
-    upstreamName: 'Codex main',
+    upstreamKind: 'chatgpt',
+    upstreamName: 'ChatGPT main',
     kind: 'natural',
     previous,
     current,

@@ -637,7 +637,7 @@ const formatQuotaWindowResolution = (
 ): string => {
   const subject = `${htmlSafeText(upstream.name)} <code>${htmlSafeText(upstream.id)}</code>`;
   const detail = resolution.status === 'unsupported'
-    ? 'This upstream does not expose Codex quota windows.'
+    ? 'This upstream does not expose ChatGPT quota windows.'
     : resolution.status === 'malformed'
       ? 'Floway returned an invalid quota-window observation. The last known notifier state was kept.'
       : resolution.status === 'ambiguous'

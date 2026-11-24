@@ -40,30 +40,30 @@ describe('formatters', () => {
   it('escapes dynamic upstream fields for Telegram HTML', () => {
     const upstream: UpstreamRecord = {
       id: 'up_<a>&',
-      kind: 'codex',
-      name: 'Codex <main> & shared',
+      kind: 'chatgpt',
+      name: 'ChatGPT <main> & shared',
       enabled: true,
       sort_order: 1,
       updated_at: '2026-06-21T00:00:00.000Z',
-      codex_quota: undefined,
+      chatgpt_quota: undefined,
       raw: {},
     };
 
     const text = formatUpstreamList([upstream]);
-    expect(text).toContain('Codex &lt;main&gt; &amp; shared');
+    expect(text).toContain('ChatGPT &lt;main&gt; &amp; shared');
     expect(text).toContain('<code>up_&lt;a&gt;&amp;</code>');
   });
 
   it('shows the selected latest-reset window while keeping provider slots diagnostic', () => {
     const upstream: UpstreamRecord = {
       id: 'up_a',
-      kind: 'codex',
-      name: 'Codex',
+      kind: 'chatgpt',
+      name: 'ChatGPT',
       enabled: true,
       sort_order: 1,
       updated_at: '2026-07-01T00:00:00.000Z',
       raw: {},
-      codex_quota: {
+      chatgpt_quota: {
         plus: {
           observed_at: '2026-07-01T01:00:00.000Z',
           active_limit: 'premium',
@@ -95,7 +95,7 @@ describe('formatters', () => {
       enabled: true,
       sort_order: 1,
       updated_at: '2026-07-01T00:00:00.000Z',
-      codex_quota: undefined,
+      chatgpt_quota: undefined,
       raw: {},
     };
 
@@ -158,12 +158,12 @@ describe('formatters', () => {
   it('formats compact quota estimates by default', () => {
     const upstream: UpstreamRecord = {
       id: 'up_a',
-      kind: 'codex',
-      name: 'Codex <main>&',
+      kind: 'chatgpt',
+      name: 'ChatGPT <main>&',
       enabled: true,
       sort_order: 1,
       updated_at: '2026-06-21T00:00:00.000Z',
-      codex_quota: undefined,
+      chatgpt_quota: undefined,
       raw: {},
     };
     const report: UsageQuotaEstimate = {
@@ -185,7 +185,7 @@ describe('formatters', () => {
     };
 
     const text = formatQuotaEstimate(upstream, report);
-    expect(text).toContain('<b>Quota estimate</b>\n\n<b>Codex &lt;main&gt;&amp;</b>');
+    expect(text).toContain('<b>Quota estimate</b>\n\n<b>ChatGPT &lt;main&gt;&amp;</b>');
     expect(text).not.toContain('<code>up_a</code>');
     expect(text).toContain('Reset in ');
     expect(text).toContain('<b>Upstream quota used</b>:\n[||||||||||||   ] <b>80.0%</b>');
@@ -200,12 +200,12 @@ describe('formatters', () => {
   it('formats verbose quota estimates with detailed fields', () => {
     const upstream: UpstreamRecord = {
       id: 'up_a',
-      kind: 'codex',
-      name: 'Codex <main>&',
+      kind: 'chatgpt',
+      name: 'ChatGPT <main>&',
       enabled: true,
       sort_order: 1,
       updated_at: '2026-06-21T00:00:00.000Z',
-      codex_quota: undefined,
+      chatgpt_quota: undefined,
       raw: {},
     };
     const report: UsageQuotaEstimate = {
@@ -227,7 +227,7 @@ describe('formatters', () => {
     };
 
     const text = formatQuotaEstimateVerbose(upstream, report);
-    expect(text).toContain('<b>Quota estimate</b> <b>Codex &lt;main&gt;&amp;</b> <code>up_a</code>');
+    expect(text).toContain('<b>Quota estimate</b> <b>ChatGPT &lt;main&gt;&amp;</b> <code>up_a</code>');
     expect(text).toContain('<b>Your upstream tokens</b>: <b>100</b>');
     expect(text).toContain('<b>Your token share</b>: [||||           ] <b>25.0%</b>');
     expect(text).toContain('<b>Estimated your used</b>: [||||||||||||   ] <b>80.0%</b> of your equal share');
@@ -303,12 +303,12 @@ describe('formatters', () => {
   it('formats quota window refresh notifications', () => {
     const upstream: UpstreamRecord = {
       id: 'up_a',
-      kind: 'codex',
-      name: 'Codex <main>&',
+      kind: 'chatgpt',
+      name: 'ChatGPT <main>&',
       enabled: true,
       sort_order: 1,
       updated_at: '2026-06-21T00:00:00.000Z',
-      codex_quota: undefined,
+      chatgpt_quota: undefined,
       raw: {},
     };
     const report: UsageWindowReport = {
@@ -329,7 +329,7 @@ describe('formatters', () => {
     const text = formatQuotaWindowNotification(upstream, report, '<b>Quota estimate</b>');
 
     expect(text).toContain('<b>Quota window refreshed</b>');
-    expect(text).toContain('<b>Codex &lt;main&gt;&amp;</b> <code>up_a</code>');
+    expect(text).toContain('<b>ChatGPT &lt;main&gt;&amp;</b> <code>up_a</code>');
     expect(text).toContain('<b>Your upstream tokens</b>: <b>100</b>');
     expect(text).toContain('<b>Requests</b>: <b>1</b> / 4');
     expect(text).toContain('<b>Upstream cost</b>: <b>$0.000100</b> / $0.000400');

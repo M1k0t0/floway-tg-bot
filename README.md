@@ -1,7 +1,7 @@
 # Floway Telegram Bot
 
 Telegram bot for Floway users to bind their Floway account, manage their own
-API keys, inspect upstreams, and view Codex quota-window usage.
+API keys, inspect upstreams, and view ChatGPT quota-window usage.
 
 The minimum supported Floway admin export version is **20**.
 
@@ -49,7 +49,7 @@ currently available to the bound Floway user. Passwords are exchanged for a
 Floway session and are never stored. Floway sessions are encrypted locally with
 `BOT_SECRET_KEY`.
 
-Codex quota output hides snapshots outside their freshness period. Each snapshot
+ChatGPT quota output hides snapshots outside their freshness period. Each snapshot
 has a minimum 24-hour lifetime from `observed_at`; future primary, secondary, or
 rate-limit reset horizons can extend that lifetime. The bot then selects the
 fresh Floway snapshot whose `active_limit` is `premium`; other active-limit
@@ -61,7 +61,7 @@ latest. The slot label does not define the reporting period, so moving the same
 window between primary and secondary does not create a refresh.
 
 The bot also polls available upstreams and sends bound users a private summary
-when the selected Codex quota window advances. Notifications are based only on
+when the selected ChatGPT quota window advances. Notifications are based only on
 confirmed Floway observations; usage attribution is an estimate from hourly
 export data. Tune the poll interval with `QUOTA_WINDOW_NOTIFY_INTERVAL_SECONDS`.
 

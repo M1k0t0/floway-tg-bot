@@ -16,7 +16,7 @@ import {
 import {
   classifyQuotaWindowTransition,
   matchesQuotaWindowCandidate,
-  CODEX_PREMIUM_ACTIVE_LIMIT,
+  CHATGPT_PREMIUM_ACTIVE_LIMIT,
   resolveQuotaWindowObservation,
   type QuotaWindowObservation,
 } from './quota-window.js';
@@ -463,7 +463,7 @@ const eventUpstream = (event: QuotaWindowEvent): UpstreamRecord => ({
   enabled: true,
   sort_order: 0,
   updated_at: new Date(event.detectedAtMs).toISOString(),
-  codex_quota: undefined,
+  chatgpt_quota: undefined,
   raw: {},
 });
 
@@ -480,7 +480,7 @@ const observationFacts = (observation: QuotaWindowObservation): QuotaWindowFacts
 const cursorObservation = (cursor: QuotaWindowCursor, fallbackBucketKey: string): QuotaWindowObservation => ({
   upstreamId: cursor.upstreamId,
   bucketKey: cursor.latest.quotaBucketKey ?? fallbackBucketKey,
-  activeLimit: CODEX_PREMIUM_ACTIVE_LIMIT,
+  activeLimit: CHATGPT_PREMIUM_ACTIVE_LIMIT,
   observedAt: new Date(cursor.latest.observedAtMs).toISOString(),
   observedAtMs: cursor.latest.observedAtMs,
   startAt: new Date(cursor.anchor.startAtMs).toISOString(),
@@ -512,7 +512,7 @@ const pendingObservation = (
   return {
     upstreamId: cursor.upstreamId,
     bucketKey: current.bucketKey,
-    activeLimit: CODEX_PREMIUM_ACTIVE_LIMIT,
+    activeLimit: CHATGPT_PREMIUM_ACTIVE_LIMIT,
     observedAt: new Date(pending.observedAtMs).toISOString(),
     observedAtMs: pending.observedAtMs,
     startAt: new Date(pending.startAtMs).toISOString(),

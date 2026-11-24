@@ -23,12 +23,12 @@ import type { AppConfig, UpstreamRecord } from '../src/types.js';
 
 const upstream = (id: string): UpstreamRecord => ({
   id,
-  kind: 'codex',
+  kind: 'chatgpt',
   name: id,
   enabled: true,
   sort_order: 0,
   updated_at: '2026-06-21T00:00:00.000Z',
-  codex_quota: undefined,
+  chatgpt_quota: undefined,
   raw: { id },
 });
 
@@ -126,7 +126,7 @@ describe('bot commands', () => {
     });
     const selected = {
       ...upstream('up_a'),
-      codex_quota: {
+      chatgpt_quota: {
         plus: {
           observed_at: '2026-07-01T01:00:00.000Z',
           active_limit: 'premium',

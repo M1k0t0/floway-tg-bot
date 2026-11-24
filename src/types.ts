@@ -58,7 +58,7 @@ export interface ModelsCacheStatus {
   lastError: { message: string; at: number } | null;
 }
 
-export interface CodexQuotaSnapshot {
+export interface ChatGPTQuotaSnapshot {
   observed_at: string;
   active_limit?: string;
   plan_type?: string;
@@ -81,7 +81,7 @@ export interface UpstreamRecord {
   sort_order: number;
   updated_at: string;
   modelsCache?: ModelsCacheStatus;
-  codex_quota: unknown;
+  chatgpt_quota: unknown;
   raw: Record<string, unknown>;
 }
 

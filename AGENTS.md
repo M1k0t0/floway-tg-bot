@@ -46,11 +46,16 @@ key-management surfaces must be scoped to the bound Floway user unless a
 Floway endpoint explicitly returns a user-specific view. The sanitized admin
 export cache is still a global backend value. Multi-upstream user-facing
 surfaces must derive a fresh `UserScopedUsageSnapshot` from the bound user's
-latest `/auth/me` upstream access and the actual upstream on each usage record;
+current usable upstream ids and the actual upstream on each usage record;
 never cache or share that scoped value across users. Exact-upstream consumers
 may use global export data only after checking that upstream against the current
 user. The notifier deliberately shares global enrichment across deliveries and
-rechecks each recipient's upstream access before rendering.
+rechecks each recipient's usable upstreams before rendering. A bound user's
+usable upstreams are what Floway's `/api/upstream-options` returns for that
+user's own session; the bot never derives access itself. Quota-share counts ask
+Floway's `/api/access-resolve`, as admin, whether each non-admin user holds
+`Model.Use` on the upstream, and cache each answer for the usage export cache
+TTL.
 
 ## Layout
 
@@ -90,7 +95,7 @@ When adding or changing commands:
 - Keep diagnostic commands out of Telegram's command menu unless the user
   explicitly asks to expose them.
 - Preserve Floway upstream access checks. A bound user must not see upstreams
-  outside their Floway `upstreamIds` restriction.
+  that Floway's upstream options leave out for their own session.
 
 ## Quota Window Notifications
 

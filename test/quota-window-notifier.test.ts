@@ -522,6 +522,58 @@ describe('QuotaWindowNotifier', () => {
     expect(text.length).toBeLessThanOrEqual(3_800);
   });
 
+  it('commits a refresh without queueing a delivery for a binding that cannot use the upstream', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T04:55:00.000Z');
+    const store = createStore();
+    bindAlice(store);
+    let upstream = quotaUpstream('2026-06-01T00:00:00.000Z', '2026-06-01T05:00:00.000Z', '2026-06-01T04:50:00.000Z', 80);
+    const runtime = createRuntime(store, () => [upstream]);
+    runtime.floway.listUsableUpstreamIds.mockResolvedValue(new Set<string>(['up_b']));
+    await runtime.notifier.pollOnce();
+
+    vi.setSystemTime('2026-06-01T05:02:00.000Z');
+    upstream = quotaUpstream('2026-06-01T05:00:00.000Z', '2026-06-01T10:00:00.000Z', '2026-06-01T05:01:00.000Z', 2);
+    await runtime.notifier.pollOnce();
+    vi.setSystemTime('2026-06-01T05:03:00.000Z');
+    await runtime.notifier.pollOnce();
+
+    expect(runtime.floway.listUsableUpstreamIds).toHaveBeenCalledWith('session');
+    expect(store.getCursor('up_a')).toMatchObject({ revision: 1, pending: null });
+    expect(store.listEvents()).toEqual([expect.objectContaining({ kind: 'natural' })]);
+    expect(store.listDeliveries()).toEqual([]);
+    expect(runtime.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('skips a queued delivery when the binding lost access to the upstream before sending', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T05:03:00.000Z');
+    const store = createStore();
+    const binding = bindAlice(store);
+    seedPendingDelivery(store, binding.bindingId);
+    const runtime = createRuntime(store, () => []);
+    runtime.floway.listUsableUpstreamIds.mockResolvedValue(new Set<string>());
+
+    await runtime.notifier.pollOnce();
+
+    expect(runtime.sendMessage).not.toHaveBeenCalled();
+    expect(store.listDeliveries()).toEqual([expect.objectContaining({ status: 'skipped' })]);
+  });
+
+  it('counts quota sharers for the delivered upstream from the shared user list', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime('2026-06-01T05:03:00.000Z');
+    const store = createStore();
+    const binding = bindAlice(store);
+    seedPendingDelivery(store, binding.bindingId);
+    const runtime = createRuntime(store, () => []);
+
+    await runtime.notifier.pollOnce();
+
+    expect(runtime.floway.countUpstreamQuotaSharers).toHaveBeenCalledWith(ADMIN_USERS, 'up_a');
+    expect(runtime.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
   it('waits for an active observation poll before stopping', async () => {
     const store = createStore();
     let resolveUpstreams!: (upstreams: UpstreamRecord[]) => void;

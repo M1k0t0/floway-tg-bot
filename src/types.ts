@@ -12,14 +12,12 @@ export interface FlowayUser {
   id: number;
   username: string;
   isAdmin: boolean;
-  upstreamIds: string[] | null;
 }
 
 export interface FlowayAdminUser {
   id: number;
   username: string;
   isAdmin: boolean;
-  upstreamIds: string[] | null;
   createdAt: string;
 }
 

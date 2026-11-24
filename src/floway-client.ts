@@ -36,6 +36,7 @@ export class FlowayClient {
   private adminSession: string | null = null;
   private adminLoginPromise: Promise<string> | null = null;
   private globalExportCache: { expiresAt: number; snapshot: GlobalUsageSnapshot } | null = null;
+  private readonly modelUseCache = new Map<string, { expiresAt: number; allowed: boolean }>();
   private readonly fetchImpl: typeof fetch;
 
   constructor(private readonly options: FlowayClientOptions) {
@@ -56,6 +57,15 @@ export class FlowayClient {
 
   async listUsers(): Promise<FlowayAdminUser[]> {
     return validateAdminUsers(await this.adminRequest<unknown>('/api/users'));
+  }
+
+  async listUsableUpstreamIds(session: string): Promise<Set<string>> {
+    return validateUpstreamOptionIds(await this.userRequest<unknown>(session, '/api/upstream-options?view=key'));
+  }
+
+  async countUpstreamQuotaSharers(users: readonly FlowayAdminUser[], upstreamId: string): Promise<number> {
+    const sharing = await Promise.all(users.map(async user => !user.isAdmin && await this.userCanUseUpstream(user.id, upstreamId)));
+    return sharing.filter(Boolean).length;
   }
 
   async logout(session: string): Promise<{ ok: true }> {
@@ -98,9 +108,8 @@ export class FlowayClient {
   }
 
   async getUpstreamModels(upstream: UpstreamRecord): Promise<UpstreamModelsResponse> {
-    return await this.adminRequest<UpstreamModelsResponse>('/api/upstreams/list-models', {
+    return await this.adminRequest<UpstreamModelsResponse>(`/api/upstreams/${encodeURIComponent(upstream.id)}/list-models`, {
       method: 'POST',
-      body: { record: upstream.raw },
     });
   }
 
@@ -153,6 +162,20 @@ export class FlowayClient {
       snapshot,
     };
     return snapshot;
+  }
+
+  private async userCanUseUpstream(userId: number, upstreamId: string): Promise<boolean> {
+    const key = `${userId}:${upstreamId}`;
+    const now = Date.now();
+    const cached = this.modelUseCache.get(key);
+    if (cached && cached.expiresAt > now) return cached.allowed;
+
+    const allowed = validateModelUseResolution(await this.adminRequest<unknown>('/api/access-resolve', {
+      method: 'POST',
+      body: { principal: { kind: 'user', id: userId }, scope: { kind: 'upstream', upstreamId } },
+    }));
+    this.modelUseCache.set(key, { expiresAt: now + this.options.usageExportCacheTtlSeconds * 1000, allowed });
+    return allowed;
   }
 
   private async userRequest<T>(session: string, path: string, init: ApiRequestInit = {}): Promise<T> {
@@ -284,12 +307,27 @@ const validateFlowayUser = (value: unknown, label: string): FlowayAdminUser => {
   const record = requireRecord(value, label);
   if (!Number.isSafeInteger(record.id) || (record.id as number) < 1
     || typeof record.username !== 'string'
-    || typeof record.isAdmin !== 'boolean'
-    || !(record.upstreamIds === null
-      || (Array.isArray(record.upstreamIds) && record.upstreamIds.every(id => typeof id === 'string')))) {
+    || typeof record.isAdmin !== 'boolean') {
     throw invalidResponse(label);
   }
   return record as unknown as FlowayAdminUser;
+};
+
+const validateUpstreamOptionIds = (value: unknown): Set<string> => {
+  if (!Array.isArray(value)) throw invalidResponse('upstream options response');
+  return new Set(value.map((item, index) => {
+    const option = requireRecord(item, `upstream option ${index}`);
+    if (typeof option.id !== 'string' || option.id.length === 0) throw invalidResponse(`upstream option ${index}`);
+    return option.id;
+  }));
+};
+
+const validateModelUseResolution = (value: unknown): boolean => {
+  const resolution = requireRecord(value, 'access resolution');
+  const values = requireRecord(resolution.values, 'access resolution values');
+  const modelUse = values['Model.Use'];
+  if (modelUse !== undefined && typeof modelUse !== 'boolean') throw invalidResponse('access resolution values');
+  return modelUse === true;
 };
 
 const validateUpstreams = (value: unknown): UpstreamRecord[] => {
